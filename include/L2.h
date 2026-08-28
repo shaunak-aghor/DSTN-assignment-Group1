@@ -6,20 +6,25 @@
 #define L2_SETS 256
 #define L2_WAYS 8
 
-
-typedef struct {
-    uint32_t valid : 1; 
-    uint32_t sequence : 3;
-    uint32_t tag : 20;
-    uint8_t data[16];
+typedef struct l2_line {
+    uint32_t valid : 1;
+    uint32_t tag   : 13;
 } L2_Line;
 
-typedef struct {
+typedef struct l2_set{
     L2_Line lines[L2_WAYS];
+    uint32_t fifo_pointer : 3; 
 } L2_Set;
 
-typedef struct {
+
+typedef struct l2{
     L2_Set sets[L2_SETS];
-} L2_Cache;
+} L2;
+
+void init_L2_cache(L2* cache);
+int L2_search(L2* cache, uint32_t physical_address);
+void L2_invalidate_block(L2* cache, uint32_t physical_address);
+uint32_t L2_allocate_block(L2* cache, uint32_t physical_address);
+
 
 #endif
