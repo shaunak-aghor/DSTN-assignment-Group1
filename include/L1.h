@@ -1,59 +1,54 @@
-#ifndef L1_CACHE_H
-#define L1_CACHE_H
-#include "common.h"
+#ifndef L1_H
+#define L1_H
 
-#define L1_SETS 64
-#define L1_WAYS 4
-#define WRITE_BUFFER_SIZE 4
+#include <stdint.h>
+#include "MemHier.h"
 
-/*
-    Some calculations:
-        each line entry in the tag directory of L1 cache requires : 1 + 2 + 15 = 18 bits
-        each set contains 4 entries : 18 * 4 = 72bits
-        L1 cache has 64 sets : 72 * 64 = 4608 bits
+/*Line layout = 146 bits = valid 1 + tag 15 + LRU 2 + data 128*/
 
-*/
+typedef struct {
+    uint32_t  valid : 1;            /*1 bit*/
+    uint32_t tag : 15;              /*15 bits*/
+    uint32_t  lru : 2;              /*2 bits -- 0 = most recently used*/
+    uint8_t  data[BLOCK_SIZE];      /*128 bits, uint8_t as 1-byte type*/
+} L1Line;
 
+typedef struct {
+    L1Line ways[L1_WAYS];
+} L1Set;
 
-//one valid bit + 2 lru counter bits + 15 tag bits
-typedef struct l1_line
-{
-    uint32_t valid : 1;
-    uint32_t lru_counter : 2;
-    uint32_t tag : 15;
-} L1_line;
+typedef struct {
+    L1Set sets[L1_SETS];
+    /*statistics, remove if not needed*/
+    uint64_t read_hits;
+    uint64_t read_misses;
+    uint64_t write_hits;
+    uint64_t write_misses;          /* no-write-allocate: no fill follows */
+    uint64_t evictions;             /* clean victims sent to the buffer */
+} L1Cache;
 
+/*lifecycle*/
+void l1_init(L1Cache *l1);
+void l1_reset_stats(L1Cache *l1);
 
-typedef struct l1_set
-{
-    L1_line L1_lines[L1_WAYS];
-} L1_set;
+/*Returns the matching way index, or -1 on a miss. TODO*/
+int  l1_probe(L1Cache *l1, uint32_t pa);
 
-typedef struct write_buffer
-{
-    uint32_t valid : 1;
-    uint32_t block_addr : 21; //everything except the offset of the block
-} Write_Buffer_Entry;
+/*Does the LRU aging and incrementation, i.e. increment if counter < old_value. TODO*/
+void l1_age(L1Cache *l1, uint32_t index, int way);
 
+/*Returns whichever index either is invalid/empty or is LRU, always returns something. TODO*/
+int  l1_select_victim(L1Cache *l1, uint32_t index);
 
+/*Adds a block and marks it as MRU, does the LRU math, to be used after evictions. TODO*/
+void l1_install(L1Cache *l1, uint32_t pa, const uint8_t *block);
 
-typedef struct l1
-{
-    L1_set L1_sets[L1_SETS];
-    Write_Buffer_Entry Write_Buffer_Entries[WRITE_BUFFER_SIZE];
-    uint8_t head : 2;
-    uint8_t tail : 2;
-} L1;
+/*Applies a store on a write hit, donot bring miss to this. TODO*/
+void l1_write_hit(L1Cache *l1, uint32_t pa, int way,
+                  const uint8_t *bytes, uint32_t len);
 
-
-void init_L1_cache(L1* cache);
-
-int L1_search(L1* cache, uint32_t physical_addr);
-int write_buffer_search(L1* cache, uint32_t physical_addr);
-void L1_update_lru(L1* cache, uint32_t index, uint8_t accessed_way);
-void L1_invalidate_block(L1* cache, uint32_t physical_addr);
-void L1_allocate_block(L1* cache, uint32_t physical_address);
-
-
+/*Full eviction function, has to handle EVERYTHING with the l1 side of evicts. TODO*/
+int  l1_evict(L1Cache *l1, uint32_t index, int way,
+              uint32_t *out_pa, uint8_t *out_block);
 
 #endif
