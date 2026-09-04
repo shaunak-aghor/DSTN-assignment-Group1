@@ -32,6 +32,7 @@ void l1_init(L1Cache *l1);
 void l1_reset_stats(L1Cache *l1);
 
 /*Returns the matching way index, or -1 on a miss. TODO*/
+// .h
 int  l1_probe(L1Cache *l1, uint32_t pa);
 
 /*Does the LRU aging and incrementation, i.e. increment if counter < old_value. TODO*/

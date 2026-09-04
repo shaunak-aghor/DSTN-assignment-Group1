@@ -15,6 +15,7 @@
 */
 
 #define BLOCK_SIZE          16
+#define STORE_WIDTH         4
 #define PAGE_SIZE           1024
 
 /*Virtual addressing*/

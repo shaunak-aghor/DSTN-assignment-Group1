@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include "MemHier.h"
 
-
 #define WB_ADDR_BITS    21
 
 /* Convert between a physical address and a stored block address */
@@ -17,10 +16,12 @@ typedef enum {
 } WBType;
 
 typedef struct {
-    uint32_t valid      : 1;    /*  1 bit  */
-    uint32_t type       : 1;    /*  1 bit  -- WBType */
-    uint32_t block_addr : 21;   /* 21 bits -- PA with offset dropped */
-} WBEntry;
+    uint32_t valid      : 1;    /* 1   bit  */
+    uint32_t type       : 1;    /* 1   bit WBType */
+    uint32_t offset     : 4;    /* 4   bits offset within block */
+    uint32_t block_addr : 21;   /* 21  bits PA with offset dropped */
+    uint8_t  data[BLOCK_SIZE];  /* 128 bits payload */
+} WBEntry;                      /* 155 bits */
 
 typedef struct {
     WBEntry entries[WB_ENTRIES];
@@ -33,7 +34,7 @@ typedef struct {
     uint64_t forwards;          /* reads satisfied by a buffer hit */
 } WriteBuffer;
 
-/*lifecycle TODO*/
+/*lifecycle DONE*/
 void wb_init(WriteBuffer *wb);
 void wb_reset_stats(WriteBuffer *wb);
 
@@ -47,17 +48,19 @@ static inline int wb_is_empty(const WriteBuffer *wb) {
 }
 
 /*TODO*/
-void wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
-void wb_enqueue_eviction(WriteBuffer *wb, uint32_t pa);
+int wb_enqueue_store(WriteBuffer *wb, uint32_t pa, const uint8_t *bytes,
+                     void *ctx, void (*sink)(void *ctx, const WBEntry *e));
+int wb_enqueue_eviction(WriteBuffer *wb, uint32_t pa, const uint8_t *block,
+                        void *ctx, void (*sink)(void *ctx, const WBEntry *e));
 
-/*Removes head entry into *out and shifts the rest down. TODO*/
+/*Removes head entry into *out and shifts the rest down. DONE*/
 int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 
-/*Drains every entry through `sink`, in order. TODO*/
+/*Drains every entry through `sink`, in order. DONE*/
 void wb_flush_all(WriteBuffer *wb, void *ctx,
                   void (*sink)(void *ctx, const WBEntry *e));
 
-/*Compare for a hit, else return -1, try parallel. TODO*/
+/*Compare for a hit, else return -1, try parallel. DONE*/
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
 
 /* ---- debug ---- */
