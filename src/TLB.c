@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "tlb_impl.h"
+#include "TLB.h"
 
 /* =====================================================================
  * LRU counter maintenance
