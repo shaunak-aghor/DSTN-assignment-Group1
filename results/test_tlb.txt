@@ -1,0 +1,240 @@
+========================================================
+  TLB flow tests -- 32 entries, PID-tagged, LRU counter
+========================================================
+
+1.  Configuration
+--------------------------------------------------------------------
+    VA 18 bits = VPN 8 + offset 10   -> 256 pages/process (256 KB)
+    PA 25 bits = frame 15 + offset 10 -> 32768 frames (32 MB)
+    entry = 1 + 8 vpn + 15 pfn + 14 pid + 5 lru = 43 bits
+    TLB storage = 32 x 43 = 1376 bits = 172 bytes
+    pass  compile-time geometry assertions held
+
+2.  Address decomposition
+--------------------------------------------------------------------
+    pass  VA 0x2A234 fits in 18 bits
+    pass  VA_VPN(0x2A234)    = 0xA8 (168)
+    pass  VA_OFFSET(0x2A234) = 0x234 (564)
+
+3.  Cold TLB -- every lookup is a compulsory miss
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after init                   (ok)
+    pass  0 valid entries after init
+    pass  lookup(pid 1, vpn 0) misses
+    pass  lookup(pid 1, vpn 1) misses
+    pass  lookup(pid 1, vpn 2) misses
+    pass  lookup(pid 1, vpn 3) misses
+    pass  lookup(pid 1, vpn 4) misses
+    pass  misses=5 hits=0
+
+4.  Fill and hit -- the full VA -> PA flow
+--------------------------------------------------------------------
+    pass  1st access to VA 0x2A234 misses -> page-table walk
+    pass  exactly 1 walk performed (1 memory access)
+    pass  2nd access to the same page hits -- no walk
+    pass  still 1 walk after the second access
+    pass  both accesses produce the same PA 0x0DA234
+    pass  page offset passes through untranslated (0x234)
+    pass  frame 872 is in range
+    L1 view of PA 0x0DA234: tag   872 | index 35 | offset 4
+    L2 view of PA 0x0DA234: tag   218 | index  35 | offset 4
+    pass  L1 tag == frame number (both 15 bits) -- the VIPT property
+    pass  LRU ranks form a permutation after fill + hit             (ok)
+
+5.  Re-inserting the same (pid, vpn) must not duplicate
+--------------------------------------------------------------------
+    pass  still exactly 1 valid entry
+    pass  the mapping was refreshed, not shadowed (pfn 0x222)
+    pass  LRU ranks form a permutation after duplicate insert       (ok)
+
+6.  LRU -- the 33rd fill evicts the true LRU entry
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  TLB is full (32 entries)
+    pass  no evictions while filling empty slots
+    pass  LRU ranks form a permutation after touching the oldest entry (ok)
+    pass  LRU ranks form a permutation after the 33rd insert        (ok)
+    pass  exactly 1 capacity eviction recorded
+    pass  vpn 0x10 survived -- it was touched
+    pass  vpn 0x11 was evicted -- it was the LRU
+    pass  vpn 0x70 is now resident
+    pass  still exactly 32 valid entries
+
+7.  PID tagging -- same VPN, different processes
+--------------------------------------------------------------------
+    pass  both mappings coexist for the same VPN 0xA8
+    pass  pid 7 -> frame 0x1A3
+    pass  pid 9 -> frame 0x2C0
+    pass  pid 5 misses -- the PID is part of the match, not just the VPN
+    pass  LRU ranks form a permutation after two-process fill       (ok)
+
+8.  Context switch -- no flush, no cost
+--------------------------------------------------------------------
+    pass  switching pid 7 -> 9 -> 7 leaves all 2 entries valid
+    pass  pid 7's mapping still hits after the switch
+    pass  and it counted as a hit, not a refill
+    (an untagged TLB would need 2 invalidations here)
+
+9.  invalidate_entry -- one page was evicted from memory
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after invalidate_entry       (ok)
+    pass  3 of 4 entries remain
+    pass  vpn 2 is gone
+    pass  its neighbours are untouched
+    pass  invalidating an absent page is a no-op
+
+10.  invalidate_pid -- a process terminated
+--------------------------------------------------------------------
+    pass  11 entries across 2 processes
+    pass  LRU ranks form a permutation after invalidate_pid         (ok)
+    pass  process 2's 5 entries were removed
+    pass  no pid-2 entry survives
+    pass  process 1 is completely unaffected
+
+11.  invalidate_frame -- a frame was reclaimed and reused
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after invalidate_frame       (ok)
+    pass  every mapping of frame 0x777 is gone, across all processes
+    pass  frame 0x778 is untouched
+    (this is the step that stops a reused frame returning stale data)
+
+12.  Freed slots are refilled before anything is evicted
+--------------------------------------------------------------------
+    pass  TLB emptied by process exit
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  refilled to 32 entries
+    pass  0 evictions -- freed slots were reused first
+
+13.  Statistics accounting
+--------------------------------------------------------------------
+    pass  hits   = 10 (expected 10)
+    pass  misses = 4 (expected 4)
+    pass  every lookup was counted exactly once
+    pass  probes and lookups never evict
+
+14.  TLB reach -- 32 entries x 1 KB = 32 KB
+--------------------------------------------------------------------
+    working set 32 pages (32 KB): hit ratio 100.00%
+    pass  32 pages fit -- 0 misses after warm-up
+    working set 33 pages (33 KB): hit ratio   0.00%
+    pass  33 pages do not fit -- LRU thrashes to 0% on a cyclic sweep
+    reach = 32 pages x 1024 B = 32 KB, and only 12.5% of a
+    process's 256-page address space
+
+15.  Processes share the 32 entries -- the aggregate set is what matters
+--------------------------------------------------------------------
+    4 procs x  6 pages = 24 mappings vs 32 slots: hit  97.50% |   24 walks
+    pass  all 960 accesses accounted for
+    pass  24 mappings fit -- no eviction, 24 walks total
+    pass  hit ratio 97.50% -- only the compulsory misses
+    pass  LRU ranks form a permutation after multi-process churn    (ok)
+    4 procs x 12 pages = 48 mappings vs 32 slots: hit   0.00% | 1920 walks
+    pass  all 1920 accesses accounted for
+    pass  48 mappings do not fit -- 1888 evictions
+    pass  every access walks the page table: 1920 memory accesses
+    pass  LRU ranks form a permutation after multi-process churn    (ok)
+    a process needing more than 32 pages resident is already
+    beyond the TLB on its own -- sharing only makes it sooner
+
+--- TLB (32 entries, PID-tagged, LRU counter) ---
+  idx  V  PID   VPN    PFN   LRU
+    0  1    2     4    388    31
+    1  1    2     5    389    30
+    2  1    2     6    390    29
+    3  1    2     7    391    28
+    4  1    2     8    392    27
+    5  1    2     9    393    26
+    6  1    2    10    394    25
+    7  1    2    11    395    24
+    8  1    3     0    448    23
+    9  1    3     1    449    22
+   10  1    3     2    450    21
+   11  1    3     3    451    20
+   12  1    3     4    452    19
+   13  1    3     5    453    18
+   14  1    3     6    454    17
+   15  1    3     7    455    16
+   16  1    3     8    456    15
+   17  1    3     9    457    14
+   18  1    3    10    458    13
+   19  1    3    11    459    12
+   20  1    4     0    512    11
+   21  1    4     1    513    10
+   22  1    4     2    514     9
+   23  1    4     3    515     8
+   24  1    4     4    516     7
+   25  1    4     5    517     6
+   26  1    4     6    518     5
+   27  1    4     7    519     4
+   28  1    4     8    520     3
+   29  1    4     9    521     2
+   30  1    4    10    522     1
+   31  1    4    11    523     0
+  valid 32/32 | hits 0 | misses 1920 | evictions 1888
+
+========================================================
+  135 checks, 0 failed
+    ALL TESTS PASSED
+========================================================

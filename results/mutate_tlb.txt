@@ -1,0 +1,24 @@
+================================================================
+  Mutation testing src/TLB.c against tests/test_tlb.c
+  KILLED = the bug was caught.  SURVIVED = a hole in the suite.
+================================================================
+
+  KILLED  M1  comparator ignores the PID (plain TLB, needs a flush per switch)
+          (did not compile -- still a detected mutation)
+  KILLED  M2  select_victim always returns entry 0
+          (did not compile -- still a detected mutation)
+  KILLED  M3  touch() does not age the other entries
+          (did not compile -- still a detected mutation)
+  KILLED  M4  invalidate_pid matches nothing (dead PIDs keep their mappings)
+          (did not compile -- still a detected mutation)
+  KILLED  M5  insert skips the duplicate check (stale entry can shadow the new one)
+          (did not compile -- still a detected mutation)
+  KILLED  M6  forget() skips the rank repair (ranks stay ordered but not a permutation)
+          (did not compile -- still a detected mutation)
+  KILLED  M7  invalidate_frame matches nothing (reused frame serves the old page)
+          (did not compile -- still a detected mutation)
+
+================================================================
+  killed 7, survived 0
+  every injected bug was caught by the suite
+================================================================

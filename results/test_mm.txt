@@ -1,0 +1,172 @@
+=================================================================
+  Main memory + address translation -- 32 MB, 1 KB pages
+=================================================================
+
+1.  Geometry -- a page table is exactly one frame
+----------------------------------------------------------------------
+    sizeof(PTE)       =  4 B   (29 bits packed into a uint32_t)
+    sizeof(PageTable) = 1024 B  = 256 PTEs x 4 B
+    sizeof(MainMemory)=  512 KB (FrameDesc x 32768 -- heap or static!)
+    pass  page table (1024 B) fits one 1024 B frame -- no multi-level walk needed
+
+2.  mm_init and frame accounting
+----------------------------------------------------------------------
+    pass  32 MB of storage allocated
+    pass  all 32768 frames free
+    pass  allocated frame 0
+    pass  free_frames dropped to 32767
+    pass  frame descriptor records pid 1, vpn 7
+
+3.  Pre-paging -- page table plus the first 2 pages
+----------------------------------------------------------------------
+    pass  mm_prepage(pid 1) succeeded
+    pass  page table is resident, in frame 1
+    pass  its frame is marked is_page_table (never evictable)
+    pass  the page table lives IN main memory, not beside it
+    pass  pages 0 and 1 are present
+    pass  page 2 is NOT -- demand paged
+    pass  frames_held = 2 (data pages only)
+    pass  3 frames consumed = 2 pages + 1 page table = MIN_FRAMES_PER_PROC
+    pass  pre-paging did not inflate the demand-fault count (0)
+
+4.  Happy path -- TLB miss, walk, then hit
+----------------------------------------------------------------------
+    pass  1st access: OK (TLB miss, PTE present)
+    pass  exactly 1 page-table walk = 1 memory access
+    pass  no page fault -- the page was pre-paged
+    pass  2nd access: OK (TLB hit)
+    pass  still 1 walk -- the TLB absorbed it
+    pass  same PA both times: 0x000E34
+    pass  page offset 0x234 passed through untranslated
+    pass  L1 tag == frame 3 -- L1 can index before translation finishes
+
+5.  Demand paging -- and the right page arrives
+----------------------------------------------------------------------
+    pass  page 37: OK (page fault serviced)
+    pass  exactly 1 disk read
+    pass  resident set grew to 3
+    pass  PTE 37 is now present
+    pass  the frame holds page 37 of pid 1 (marker 1/37)
+    pass  second access hits the TLB
+
+6.  Edge case -- virtual address outside the 18-bit space
+----------------------------------------------------------------------
+    pass  VA 0x40000: FAULT: address out of range
+    pass  *pa_out untouched on a fault
+    pass  rejected before any page-table access
+    pass  counted as an address fault
+    (without this check VA_VPN() would truncate 0x40000 to page 0)
+
+7.  Edge case -- protection violation, before any disk work
+----------------------------------------------------------------------
+    pass  write to a read-only page: FAULT: protection violation
+    pass  no disk read was wasted on it
+    pass  no frame was allocated for it
+    pass  the page is still absent
+    pass  reading the same page is allowed: OK (page fault serviced)
+    note: after this fill, protection is no longer re-checked on
+    a TLB hit -- TLBImplEntry has no prot bits (see translate.h)
+
+8.  Edge case -- unknown or inactive process
+----------------------------------------------------------------------
+    pass  pid 99 was never created: FAULT: process not runnable
+    pass  no Process record for pid 99
+
+9.  Writes set the PTE dirty bit
+----------------------------------------------------------------------
+    pass  page 37 starts clean
+    pass  write translated: OK (TLB hit)
+    pass  PTE 37 is dirty -- meaning dirty vs DISK; both caches are write-through so no cache holds newer bytes
+
+10.  LFU with aging -- the shift register
+----------------------------------------------------------------------
+    after 8 ticks: hot aging = 0xFF, cold aging = 0x00
+    pass  a page used every interval saturates at 0xFF
+    pass  an unused page decays to 0x00 -- LFU alone would have kept it forever on its old count
+    pass  the reference bit is cleared by the tick
+    pass  FrameDesc.aging mirrors PTE.aging, so victim search stays linear
+    pass  one touch puts a 1 in the MSB: 0x80
+    pass  and an idle interval shifts the hot page to 0x7F -- recency outranks raw frequency
+
+11.  Victim policy -- lowest aging, skip page tables, honour floors
+----------------------------------------------------------------------
+    pass  picked frame 18 -- the lowest aging (0x01)
+    pass  and it is not a page table
+    pass  at lower_limit=8, pid 1's pages are skipped (victim now -1)
+    pass  the victim no longer belongs to the pinned process
+    pass  page-table frames are never chosen even at aging 0x00
+
+12.  upper_limit forces a process to evict its own page
+----------------------------------------------------------------------
+    pass  resident set never exceeded upper_limit (peak 4)
+    pass  and sits at the cap: 4 frames
+    pass  memory was never short -- the cap alone forced the evictions
+    20 pages touched, 4 frames allowed: local replacement
+    inside an otherwise global policy
+
+13.  Frame reuse invalidates the TLB  <-- the correctness landmine
+----------------------------------------------------------------------
+    pass  page 4 is cached in the TLB, mapping frame 47
+    pass  main memory is full
+    pass  faulting page 60: OK (page fault serviced)
+    pass  the victim's PTE was cleared
+    pass  its TLB entry is GONE -- otherwise a hit would hand back frame 47, which now holds page 60
+    pass  1 TLB entries invalidated
+    pass  the cache layer was told to invalidate frame 47 too
+    pass  and page 60 was given exactly that frame -- the reuse is real
+    pass  TLB now maps page 60 -> frame 47
+
+14.  Cross-process eviction clears the VICTIM OWNER's PTE
+----------------------------------------------------------------------
+    pass  pid 1 faults: OK (page fault serviced)
+    pass  pid 1 took frame 57 from pid 2 (global replacement)
+    pass  pid 2's PTE for page 5 was cleared -- not pid 1's
+    pass  pid 2's resident set dropped 9 -> 8
+    pass  and pid 2's TLB entry for it is gone
+    without mm_set_process_table() the fault would have cleared
+    the WRONG page table and left pid 2 pointing at pid 1's page
+
+15.  Dirty victims are written back to disk
+----------------------------------------------------------------------
+    pass  page 3 is dirty
+    pass  1 write-back performed (1 total)
+    both caches are write-through, so main memory already held
+    the newest bytes -- no cache flush was needed first
+
+16.  Process exit releases frames and TLB entries
+----------------------------------------------------------------------
+    pass  pid 2 owns 8 TLB entries before exit
+    pass  10 data frames + 1 page-table frame returned (free 32750 -> 32761)
+    pass  the page-table frame is released -- only exit can free it, since replacement never touches it
+    pass  every pid-2 TLB entry is gone -- PIDs are 14 bits and get recycled, so this is mandatory
+    pass  pid 1 is completely unaffected
+    pass  pid 2 is torn down
+
+17.  Block reads and write-through arrivals
+----------------------------------------------------------------------
+    pass  1 block fetch counted
+    pass  1 write-through arrival counted
+    pass  the 4 written bytes are visible at block offset 0
+    pass  and nothing outside them changed
+
+--- MMU ---
+  accesses ................ 1
+  TLB hits / misses ....... 0 / 1   (hit ratio 0.00%)
+  page-table walks ........ 1   (= 1 uncached memory accesses)
+  page faults ............. 0   (0.000% of accesses)
+  protection faults ....... 0
+  address faults .......... 0
+  out-of-frame failures ... 0
+  frames reclaimed ........ 0
+  TLB entries invalidated . 0   (by frame reuse)
+--- Main memory ---
+  free frames ............. 32765 / 32768
+  page faults ............. 0
+  disk reads .............. 2
+  disk write-backs ........ 0
+  write-through arrivals .. 1
+  16 B block fetches ...... 2
+
+=================================================================
+  83 checks, 0 failed  --  ALL TESTS PASSED
+=================================================================

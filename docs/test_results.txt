@@ -1,0 +1,1114 @@
+================================================================================
+ DSTN-assignment-Group1 -- full test run
+ date : 2026-09-05 07:37:58 UTC
+ host : Linux x86_64
+ cc   : gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+================================================================================
+
+$ make
+  mkdir -p obj
+  gcc -Wall -Wextra -g -pthread -I./include -c src/MainMemory.c -o obj/MainMemory.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/TLB.c -o obj/TLB.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/cache.c -o obj/cache.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/l1.c -o obj/l1.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/l2.c -o obj/l2.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/main.c -o obj/main.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/translate.c -o obj/translate.o
+  gcc -Wall -Wextra -g -pthread -I./include -c src/wb.c -o obj/wb.o
+  gcc -Wall -Wextra -g -pthread -I./include -o sim_q3 obj/MainMemory.o obj/TLB.o obj/cache.o obj/l1.o obj/l2.o obj/main.o obj/translate.o obj/wb.o
+  make exit = 0
+
+================================================================================
+$ gcc -Wall -Wextra -Wpedantic -g -I./include -o test_tlb tests/test_tlb.c src/TLB.c
+  compile exit = 0  (no lines above = zero warnings)
+$ ./test_tlb
+========================================================
+  TLB flow tests -- 32 entries, PID-tagged, LRU counter
+========================================================
+
+1.  Configuration
+--------------------------------------------------------------------
+    VA 18 bits = VPN 8 + offset 10   -> 256 pages/process (256 KB)
+    PA 25 bits = frame 15 + offset 10 -> 32768 frames (32 MB)
+    entry = 1 + 8 vpn + 15 pfn + 14 pid + 5 lru = 43 bits
+    TLB storage = 32 x 43 = 1376 bits = 172 bytes
+    pass  compile-time geometry assertions held
+
+2.  Address decomposition
+--------------------------------------------------------------------
+    pass  VA 0x2A234 fits in 18 bits
+    pass  VA_VPN(0x2A234)    = 0xA8 (168)
+    pass  VA_OFFSET(0x2A234) = 0x234 (564)
+
+3.  Cold TLB -- every lookup is a compulsory miss
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after init                   (ok)
+    pass  0 valid entries after init
+    pass  lookup(pid 1, vpn 0) misses
+    pass  lookup(pid 1, vpn 1) misses
+    pass  lookup(pid 1, vpn 2) misses
+    pass  lookup(pid 1, vpn 3) misses
+    pass  lookup(pid 1, vpn 4) misses
+    pass  misses=5 hits=0
+
+4.  Fill and hit -- the full VA -> PA flow
+--------------------------------------------------------------------
+    pass  1st access to VA 0x2A234 misses -> page-table walk
+    pass  exactly 1 walk performed (1 memory access)
+    pass  2nd access to the same page hits -- no walk
+    pass  still 1 walk after the second access
+    pass  both accesses produce the same PA 0x0DA234
+    pass  page offset passes through untranslated (0x234)
+    pass  frame 872 is in range
+    L1 view of PA 0x0DA234: tag   872 | index 35 | offset 4
+    L2 view of PA 0x0DA234: tag   218 | index  35 | offset 4
+    pass  L1 tag == frame number (both 15 bits) -- the VIPT property
+    pass  LRU ranks form a permutation after fill + hit             (ok)
+
+5.  Re-inserting the same (pid, vpn) must not duplicate
+--------------------------------------------------------------------
+    pass  still exactly 1 valid entry
+    pass  the mapping was refreshed, not shadowed (pfn 0x222)
+    pass  LRU ranks form a permutation after duplicate insert       (ok)
+
+6.  LRU -- the 33rd fill evicts the true LRU entry
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  LRU ranks form a permutation during fill                  (ok)
+    pass  TLB is full (32 entries)
+    pass  no evictions while filling empty slots
+    pass  LRU ranks form a permutation after touching the oldest entry (ok)
+    pass  LRU ranks form a permutation after the 33rd insert        (ok)
+    pass  exactly 1 capacity eviction recorded
+    pass  vpn 0x10 survived -- it was touched
+    pass  vpn 0x11 was evicted -- it was the LRU
+    pass  vpn 0x70 is now resident
+    pass  still exactly 32 valid entries
+
+7.  PID tagging -- same VPN, different processes
+--------------------------------------------------------------------
+    pass  both mappings coexist for the same VPN 0xA8
+    pass  pid 7 -> frame 0x1A3
+    pass  pid 9 -> frame 0x2C0
+    pass  pid 5 misses -- the PID is part of the match, not just the VPN
+    pass  LRU ranks form a permutation after two-process fill       (ok)
+
+8.  Context switch -- no flush, no cost
+--------------------------------------------------------------------
+    pass  switching pid 7 -> 9 -> 7 leaves all 2 entries valid
+    pass  pid 7's mapping still hits after the switch
+    pass  and it counted as a hit, not a refill
+    (an untagged TLB would need 2 invalidations here)
+
+9.  invalidate_entry -- one page was evicted from memory
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after invalidate_entry       (ok)
+    pass  3 of 4 entries remain
+    pass  vpn 2 is gone
+    pass  its neighbours are untouched
+    pass  invalidating an absent page is a no-op
+
+10.  invalidate_pid -- a process terminated
+--------------------------------------------------------------------
+    pass  11 entries across 2 processes
+    pass  LRU ranks form a permutation after invalidate_pid         (ok)
+    pass  process 2's 5 entries were removed
+    pass  no pid-2 entry survives
+    pass  process 1 is completely unaffected
+
+11.  invalidate_frame -- a frame was reclaimed and reused
+--------------------------------------------------------------------
+    pass  LRU ranks form a permutation after invalidate_frame       (ok)
+    pass  every mapping of frame 0x777 is gone, across all processes
+    pass  frame 0x778 is untouched
+    (this is the step that stops a reused frame returning stale data)
+
+12.  Freed slots are refilled before anything is evicted
+--------------------------------------------------------------------
+    pass  TLB emptied by process exit
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  LRU ranks form a permutation during refill                (ok)
+    pass  refilled to 32 entries
+    pass  0 evictions -- freed slots were reused first
+
+13.  Statistics accounting
+--------------------------------------------------------------------
+    pass  hits   = 10 (expected 10)
+    pass  misses = 4 (expected 4)
+    pass  every lookup was counted exactly once
+    pass  probes and lookups never evict
+
+14.  TLB reach -- 32 entries x 1 KB = 32 KB
+--------------------------------------------------------------------
+    working set 32 pages (32 KB): hit ratio 100.00%
+    pass  32 pages fit -- 0 misses after warm-up
+    working set 33 pages (33 KB): hit ratio   0.00%
+    pass  33 pages do not fit -- LRU thrashes to 0% on a cyclic sweep
+    reach = 32 pages x 1024 B = 32 KB, and only 12.5% of a
+    process's 256-page address space
+
+15.  Processes share the 32 entries -- the aggregate set is what matters
+--------------------------------------------------------------------
+    4 procs x  6 pages = 24 mappings vs 32 slots: hit  97.50% |   24 walks
+    pass  all 960 accesses accounted for
+    pass  24 mappings fit -- no eviction, 24 walks total
+    pass  hit ratio 97.50% -- only the compulsory misses
+    pass  LRU ranks form a permutation after multi-process churn    (ok)
+    4 procs x 12 pages = 48 mappings vs 32 slots: hit   0.00% | 1920 walks
+    pass  all 1920 accesses accounted for
+    pass  48 mappings do not fit -- 1888 evictions
+    pass  every access walks the page table: 1920 memory accesses
+    pass  LRU ranks form a permutation after multi-process churn    (ok)
+    a process needing more than 32 pages resident is already
+    beyond the TLB on its own -- sharing only makes it sooner
+
+--- TLB (32 entries, PID-tagged, LRU counter) ---
+  idx  V  PID   VPN    PFN   LRU
+    0  1    2     4    388    31
+    1  1    2     5    389    30
+    2  1    2     6    390    29
+    3  1    2     7    391    28
+    4  1    2     8    392    27
+    5  1    2     9    393    26
+    6  1    2    10    394    25
+    7  1    2    11    395    24
+    8  1    3     0    448    23
+    9  1    3     1    449    22
+   10  1    3     2    450    21
+   11  1    3     3    451    20
+   12  1    3     4    452    19
+   13  1    3     5    453    18
+   14  1    3     6    454    17
+   15  1    3     7    455    16
+   16  1    3     8    456    15
+   17  1    3     9    457    14
+   18  1    3    10    458    13
+   19  1    3    11    459    12
+   20  1    4     0    512    11
+   21  1    4     1    513    10
+   22  1    4     2    514     9
+   23  1    4     3    515     8
+   24  1    4     4    516     7
+   25  1    4     5    517     6
+   26  1    4     6    518     5
+   27  1    4     7    519     4
+   28  1    4     8    520     3
+   29  1    4     9    521     2
+   30  1    4    10    522     1
+   31  1    4    11    523     0
+  valid 32/32 | hits 0 | misses 1920 | evictions 1888
+
+========================================================
+  135 checks, 0 failed
+    ALL TESTS PASSED
+========================================================
+  >>> exit code = 0
+
+================================================================================
+$ gcc -Wall -Wextra -Wpedantic -g -I./include -o test_tlb_full tests/test_tlb_full.c src/TLB.c
+  compile exit = 0  (no lines above = zero warnings)
+$ ./test_tlb_full
+=========================================================================
+  TLB -- exhaustive scenario coverage
+  boundary values, field truncation, PID reuse, differential testing
+=========================================================================
+
+S1   Boundary: the first and last page of an address space
+------------------------------------------------------------------------
+     ok   vpn 0 (first page) maps to frame 0x111
+     ok   vpn 255 (last page) maps to frame 0x222
+     ok   they occupy different entries -- vpn 0 is not confused with 255
+     => scenario passed
+
+S2   Boundary: lowest and highest PID the 14-bit field can hold
+------------------------------------------------------------------------
+     ok   pid 1 -> frame 0x300
+     ok   pid 16383 (2^14 - 1) -> frame 0x400
+     ok   both survive: the PID field holds its full range
+     => scenario passed
+
+S3   Boundary: frame 0 and the last frame in 32 MB
+------------------------------------------------------------------------
+     ok   frame 0 survives the round trip (a zero pfn is legal)
+     ok   frame 32767 survives -- the 15-bit field is not one bit short
+     => scenario passed
+
+S4   Field truncation is CONSISTENT between insert and probe
+------------------------------------------------------------------------
+     ok   vpn 300 is found again under vpn 300
+     ok   and under its masked form 44 -- same entry, no split
+     ok   pfn 32768 + 5 masks to 5 -- and stays masked on read
+     ok   a stored frame is ALWAYS a legal frame number
+     => scenario passed
+
+S5   PID recycling: a new process must not inherit a dead one's TLB
+------------------------------------------------------------------------
+     ok   pid 5 has its mappings cached
+     ok   the new pid 5 inherits NOTHING -- all 4 lookups miss
+          PID_BITS = 14, so only 16384 identifiers exist and
+          recycling is inevitable in a long run. Without the
+          invalidation on exit, the new process would read the
+          dead process's frames -- a total protection failure.
+     ok   and establishes its own mapping for vpn 2 -> 0x999
+     => scenario passed
+
+S6   Negative control: the same sequence WITHOUT the invalidation
+------------------------------------------------------------------------
+     ok   the stale entries ARE still reachable -- confirming the previous scenario tested something real, not a tautology
+     => scenario passed
+
+S7   Churn on a single mapping never grows or evicts
+------------------------------------------------------------------------
+     ok   exactly 1 valid entry after 1000 inserts
+     ok   0 evictions (0)
+     ok   and it holds the newest frame 0x807
+     => scenario passed
+
+S8   Scattered invalidation then refill reuses holes, never evicts
+------------------------------------------------------------------------
+     ok   11 holes refilled with 0 evictions (0)
+     ok   TLB is full again (32 entries)
+     => scenario passed
+
+S9   Statistics stay self-consistent under a mixed workload
+------------------------------------------------------------------------
+     ok   hits (689) + misses (2690) == lookups (3379)
+     ok   evictions (1288) never exceed the inserts that caused them
+     => scenario passed
+
+S10  Differential: pressure -- working set 4x the TLB
+------------------------------------------------------------------------
+     ok   4 pids x 32 pages           200000 ops  (119796 lookups, 18.5% hit | 60290 inserts | 19914 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S11  Differential: fits -- working set smaller than the TLB
+------------------------------------------------------------------------
+     ok   2 pids x 8 pages            100000 ops  (70219 lookups, 57.2% hit | 24729 inserts | 5052 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   100,000 operations, no divergence
+     => scenario passed
+
+S12  Differential: invalidation-heavy -- constant paging churn
+------------------------------------------------------------------------
+     ok   8 pids, 40% invalidations   200000 ops  (59776 lookups, 2.7% hit | 60061 inserts | 80163 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S13  Differential: single hot page -- degenerate locality
+------------------------------------------------------------------------
+     ok   1 pid x 1 page               50000 ops  (24806 lookups, 85.7% hit | 20192 inserts | 5002 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   50,000 operations, no divergence
+     => scenario passed
+
+S14  Differential: exactly TLB-sized working set (the boundary)
+------------------------------------------------------------------------
+     ok   1 pid x 32 pages            200000 ops  (130607 lookups, 46.2% hit | 59361 inserts | 10032 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S15  Differential: one page more than the TLB holds
+------------------------------------------------------------------------
+     ok   1 pid x 33 pages            200000 ops  (129659 lookups, 45.9% hit | 60409 inserts | 9932 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+=========================================================================
+  15 scenarios run, 15 passed, 0 failed
+  differential coverage: 950,000 operations against a reference model
+=========================================================================
+  >>> exit code = 0
+
+================================================================================
+$ gcc -Wall -Wextra -Wpedantic -g -I./include -o test_tlb_workflow tests/test_tlb_workflow.c src/MainMemory.c src/translate.c src/TLB.c
+  compile exit = 0  (no lines above = zero warnings)
+$ ./test_tlb_workflow
+========================================================================
+  TLB WORKFLOW TEST CASES
+  pre-paging of the first 2 pages, and page-fault handling
+  page = frame = 1024 B, VA 18 bits, TLB 32 entries
+========================================================================
+
+TC-01  Pre-paging loads exactly the first 2 pages
+==========================================================================
+  Input     : mm_prepage(pid 1)
+  Setup     : fresh 32 MB memory, no process yet
+  Expected  : return code            = 0
+              PTE[0].present         = 1
+              PTE[1].present         = 1
+              PTE[2].present         = 0
+              frames_held            = 2
+              frames consumed        = 3
+              disk reads             = 2
+  Actual    : return code            = 0
+              PTE[0].present         = 1
+              PTE[1].present         = 1
+              PTE[2].present         = 0
+              frames_held            = 2
+              frames consumed        = 3
+              disk reads             = 2
+  Result    : PASS
+  Why       : The specification pre-pages the first 2 pages only. The third
+              frame is the page table itself, which must be resident
+              before any translation can happen -- hence
+              MIN_FRAMES_PER_PROC = 3 = 2 pages + 1 page table.
+              Two disk reads happened: pre-paging is real I/O.
+
+TC-02  Pre-paging puts NOTHING in the TLB
+==========================================================================
+  Input     : inspect the TLB immediately after mm_prepage(pid 1)
+  Setup     : pages 0 and 1 are resident in main memory
+  Expected  : valid TLB entries      = 0
+              probe(pid 1, vpn 0)    = -1
+              probe(pid 1, vpn 1)    = -1
+              16 B block fetches     = 0
+  Actual    : valid TLB entries      = 0
+              probe(pid 1, vpn 0)    = -1
+              probe(pid 1, vpn 1)    = -1
+              16 B block fetches     = 0
+  Result    : PASS
+  Why       : The specification says pre-paged "into main memory [not to
+              cache]". The TLB caches TRANSLATIONS, and a translation
+              only exists once something has been translated -- no
+              reference has been made yet. So pre-paging populates the
+              page table, not the TLB, and block_fetches = 0 confirms
+              nothing reached L1/L2 either. The first instruction fetch
+              is therefore a guaranteed TLB miss AND cache miss.
+
+TC-03  First touch of a PRE-PAGED page: TLB miss, but no fault
+==========================================================================
+  Input     : read VA 0x00434  (page 1, offset 0x034)
+  Setup     : page 1 pre-paged and present; TLB empty
+  Expected  : status                 = OK (TLB miss, PTE present)
+              TLB misses             = 1
+              page-table walks       = 1
+              page faults            = 0
+              disk reads             = 0
+              TLB entries now        = 1
+  Actual    : status                 = OK (TLB miss, PTE present)
+              TLB misses             = 1
+              page-table walks       = 1
+              page faults            = 0
+              disk reads             = 0
+              TLB entries now        = 1
+  Result    : PASS
+  Why       : This is the case pre-paging exists to create, and the reason
+              the MMU returns THREE distinct success codes. A TLB miss
+              whose walk finds the PTE already present costs ONE memory
+              access and no disk I/O. Without pre-paging this same
+              access would have been a page fault: a walk PLUS a disk
+              read PLUS an instruction restart.
+
+TC-04  Second touch of the same page: pure TLB hit
+==========================================================================
+  Input     : read VA 0x00438  (page 1 again, different offset)
+  Setup     : the TLB now holds (pid 1, vpn 1)
+  Expected  : status                 = OK (TLB hit)
+              TLB hits               = 1
+              page-table walks       = 0
+              disk reads             = 0
+  Actual    : status                 = OK (TLB hit)
+              TLB hits               = 1
+              page-table walks       = 0
+              disk reads             = 0
+  Result    : PASS
+  Why       : Zero walks is the whole point of the TLB: the page table was
+              not touched at all. Since page tables are never cached,
+              every avoided walk is one avoided main-memory access.
+
+TC-05  First touch of a NON-pre-paged page: full page fault
+==========================================================================
+  Input     : read VA 0x02534  (page 9, offset 0x134)
+  Setup     : page 9 was never loaded: PTE[9].present = 0
+  Expected  : status                 = OK (page fault serviced)
+              TLB misses             = 1
+              page-table walks       = 1
+              page faults            = 1
+              disk reads             = 1
+              PTE[9].present         = 1
+              frames_held grew by    = 1
+              PA page offset         = 308
+  Actual    : status                 = OK (page fault serviced)
+              TLB misses             = 1
+              page-table walks       = 1
+              page faults            = 1
+              disk reads             = 1
+              PTE[9].present         = 1
+              frames_held grew by    = 1
+              PA page offset         = 308
+  Result    : PASS
+  Why       : The demand-paging path, end to end. Compare with TC-03: the
+              TLB miss and the walk are identical -- what differs is
+              that the PTE came back absent, so the OS had to allocate
+              a frame and read the page from disk. The page offset
+              0x134 is unchanged in the physical address, because
+              translation only ever replaces the page number.
+
+TC-06  The fault handler leaves the translation IN the TLB
+==========================================================================
+  Input     : read VA 0x02540 again (page 9, new offset)
+  Setup     : the fault in TC-05 has just completed
+  Expected  : status                 = OK (TLB hit)
+              page-table walks       = 0
+              page faults            = 0
+              disk reads             = 0
+  Actual    : status                 = OK (TLB hit)
+              page-table walks       = 0
+              page faults            = 0
+              disk reads             = 0
+  Result    : PASS
+  Why       : A fault that did not fill the TLB would make the restarted
+              instruction miss again, walk again, and -- because the
+              PTE is now present -- silently cost a second memory
+              access forever after. Step [7] of the flow inserts the
+              mapping before the physical address is built.
+
+TC-07  A FAILED access must not pollute the TLB
+==========================================================================
+  Input     : write to VA 0x0C810, on a page marked r--
+  Setup     : PTE[50].prot = PROT_READ, page absent
+  Expected  : status                 = FAULT: protection violation
+              probe(pid 1, vpn 50)   = -1
+              page faults            = 0
+              disk reads             = 0
+              PTE[50].present        = 0
+  Actual    : status                 = FAULT: protection violation
+              probe(pid 1, vpn 50)   = -1
+              page faults            = 0
+              disk reads             = 0
+              PTE[50].present        = 0
+  Result    : PASS
+  Why       : Two things are proved at once. No TLB entry was created, so a
+              later legal access is still forced through the page table.
+              And no frame or disk read was spent: protection is checked
+              immediately after the walk, BEFORE the fault path, so an
+              access that can never succeed costs nothing but the walk.
+
+TC-08  An out-of-range VA never reaches the TLB at all
+==========================================================================
+  Input     : read VA 0x40000  (= 2^18, one past the address space)
+  Setup     : pid 1 is running normally
+  Expected  : status                 = FAULT: address out of range
+              TLB lookups performed  = 0
+              valid TLB entries unchanged = 2
+              pa_out left untouched  = 3735928559
+  Actual    : status                 = FAULT: address out of range
+              TLB lookups performed  = 0
+              valid TLB entries unchanged = 2
+              pa_out left untouched  = 3735928559
+  Result    : PASS
+  Why       : VA_VPN() masks to 8 bits, so 0x40000 would decode as PAGE 0 --
+              and page 0 is resident, so the access would SUCCEED while
+              reading completely the wrong page. The range check runs
+              before the split, which is why zero TLB lookups happened.
+
+TC-09  Every TLB miss costs exactly one page-table walk
+==========================================================================
+  Input     : 40 reads spread over 20 distinct pages of pid 2
+  Setup     : pid 2 pre-paged, TLB shared with pid 1's entries
+  Expected  : accesses               = 40
+              TLB misses             = 20
+              TLB hits               = 20
+              page-table walks       = 20
+              walks == misses        = 1
+  Actual    : accesses               = 40
+              TLB misses             = 20
+              TLB hits               = 20
+              page-table walks       = 20
+              walks == misses        = 1
+  Result    : PASS
+  Why       : Each page is touched twice: the first touch misses and walks,
+              the second hits. walks == misses is an invariant of the
+              design -- the page table is consulted if and only if the
+              TLB failed. Note pid 2's first 2 pages were pre-paged, so
+              of the 20 misses only 18 became page faults.
+
+TC-10  Pre-paged pages fault on their FIRST access only if evicted
+==========================================================================
+  Input     : pid 3 with upper_limit 4, then touch 12 distinct pages
+  Setup     : cap forces the process to evict its own pages
+  Expected  : peak resident frames   = 4
+              final resident frames  = 4
+              page faults            = 10
+              free frames still ample = 1
+  Actual    : peak resident frames   = 4
+              final resident frames  = 4
+              page faults            = 10
+              free frames still ample = 1
+  Result    : PASS
+  Why       : Pre-paging is a head start, not a guarantee. Pages 0 and 1 came
+              in free, so 12 pages touched cost only 10 faults. But the
+              upper_limit caps the resident set at 4, so the pre-paged
+              pages are evicted like any other -- and memory was never
+              short (32000+ frames free), proving the CAP forced this,
+              not scarcity.
+
+TC-11  A fault that evicts a page kills that page's TLB entry
+==========================================================================
+  Input     : fault in a new page when memory is full and page 4 is coldest
+  Setup     : memory filled; pid 1 holds pages 0-7; page 4 is in the TLB
+  Expected  : page 4 is in the TLB before = 1
+              status                 = OK (page fault serviced)
+              PTE[4].present after   = 0
+              probe(pid 1, vpn 4) after = -1
+              page 60's new frame    = 43
+  Actual    : page 4 is in the TLB before = 1
+              status                 = OK (page fault serviced)
+              PTE[4].present after   = 0
+              probe(pid 1, vpn 4) after = -1
+              page 60's new frame    = 43
+  Result    : PASS
+  Why       : This is the page-fault case that actually endangers the TLB.
+              Frame reuse makes a cached translation a lie: a hit on
+              page 4 would return a frame that now holds page 60. The
+              fault handler notifies the MMU, which calls
+              tlb_impl_invalidate_frame() BEFORE the frame is refilled.
+              Note it is invalidated by FRAME, not by page, because a
+              frame can be mapped from several page tables.
+
+TC-12  Pre-paging both processes: TLB stays empty, memory does not
+==========================================================================
+  Input     : mm_prepage(pid 1); mm_prepage(pid 2)
+  Setup     : fresh memory
+  Expected  : frames consumed        = 6
+              valid TLB entries      = 0
+              pid 1 frames_held      = 2
+              pid 2 frames_held      = 2
+              demand page faults     = 0
+  Actual    : frames consumed        = 6
+              valid TLB entries      = 0
+              pid 1 frames_held      = 2
+              pid 2 frames_held      = 2
+              demand page faults     = 0
+  Result    : PASS
+  Why       : 6 frames = 2 processes x (2 pre-paged pages + 1 page table).
+              The TLB is still completely empty: pre-paging is a MEMORY
+              event, not a translation event. And page_faults stays 0
+              because pre-paged loads are planned, not demanded -- they
+              cost disk reads but must not inflate the fault rate you
+              report.
+
+TC-13  Dead or unknown process is rejected before the TLB
+==========================================================================
+  Input     : read VA 0x00400 as pid 9 (never created)
+  Setup     : only pid 1 and pid 2 exist; pid 1 is running
+  Expected  : status                 = FAULT: process not runnable
+              TLB lookups performed  = 0
+              page-table walks       = 0
+  Actual    : status                 = FAULT: process not runnable
+              TLB lookups performed  = 0
+              page-table walks       = 0
+  Result    : PASS
+  Why       : Step [2] runs before step [3]. Without it the TLB would be
+              probed with a PID that owns no page table, and a stale
+              entry from a recycled PID could produce a hit for a
+              process that does not exist.
+
+TC-14  Execute permission is enforced separately from read
+==========================================================================
+  Input     : X (instruction fetch) on page 30 marked rw- , then on page 31 marked r-x
+  Setup     : pid 1 running; both pages absent
+  Expected  : X on rw- page (absent) = FAULT: protection violation
+              X on r-x page (absent) = OK (page fault serviced)
+              W on r-x page, TLB cached = OK (TLB hit)
+              W on r-x page, after invalidate = FAULT: protection violation
+              probe(pid 1, vpn 30)   = -1
+  Actual    : X on rw- page (absent) = FAULT: protection violation
+              X on r-x page (absent) = OK (page fault serviced)
+              W on r-x page, TLB cached = OK (TLB hit)
+              W on r-x page, after invalidate = FAULT: protection violation
+              probe(pid 1, vpn 30)   = -1
+  Result    : PASS
+  Why       : Three access types, three independent permission bits: page 30
+              is rw- so a fetch is refused, page 31 is r-x so a fetch
+              succeeds but a write is refused. The third line is the
+              honest part -- my FIRST version of this case expected the
+              write to fault, and the harness caught the wrong
+              EXPECTATION, not a code bug: page 31 was cached by the
+              successful fetch, and a TLB hit carries no protection
+              bits. Line four forces the walk and the check fires.
+              Also note page 30 left no TLB entry: a refused access
+              never caches a translation.
+
+TC-15  The aging timer fires automatically every N accesses
+==========================================================================
+  Input     : tick_interval = 5, then 20 accesses that never touch page 5
+  Setup     : page 5 faulted in (aging = 0x80, referenced = 1)
+  Expected  : aging before ticks     = 128
+              ticks that should fire (20/5) = 4
+              aging after 4 ticks    = 24
+              referenced bit cleared = 0
+  Actual    : aging before ticks     = 128
+              ticks that should fire (20/5) = 4
+              aging after 4 ticks    = 24
+              referenced bit cleared = 0
+  Result    : PASS
+  Why       : Hand-computed: 0x80 -> (0x80>>1)|0x80 = 0xC0 on the first tick
+              (its reference bit was still set from the fault), then
+              0x60, 0x30, 0x18 as it goes unreferenced. An unused page
+              decays exponentially, which is exactly what stops plain
+              LFU from keeping a once-hot page resident forever.
+
+TC-16  A page fault into a FULL TLB evicts the LRU entry
+==========================================================================
+  Input     : touch 32 distinct pages to fill the TLB, then fault a 33rd
+  Setup     : memory is plentiful; only the TLB is under pressure
+  Expected  : valid TLB entries      = 32
+              TLB evictions so far   = 0
+              status                 = OK (page fault serviced)
+              valid TLB entries after = 32
+              TLB evictions          = 1
+              page 0 survived (was touched) = 1
+              page 1 evicted (was LRU) = -1
+  Actual    : valid TLB entries      = 32
+              TLB evictions so far   = 0
+              status                 = OK (page fault serviced)
+              valid TLB entries after = 32
+              TLB evictions          = 1
+              page 0 survived (was touched) = 1
+              page 1 evicted (was LRU) = -1
+  Result    : PASS
+  Why       : Two independent resources can be full at once. Here memory has
+              32000+ free frames, so the fault is cheap, but the TLB is
+              at capacity and must drop something. Page 0 was refreshed
+              just before, so LRU protects it and kills page 1 -- under
+              FIFO page 0 would have died instead.
+
+TC-17  upper_limit self-eviction ALSO invalidates the TLB
+==========================================================================
+  Input     : pid 1 capped at 4 frames touches pages 0..5
+  Setup     : memory is plentiful -- only the per-process cap forces eviction
+  Expected  : resident frames        = 4
+              pages evicted by the cap = 2
+              evicted pages still in TLB = 0
+              free frames still ample = 1
+  Actual    : resident frames        = 4
+              pages evicted by the cap = 2
+              evicted pages still in TLB = 0
+              free frames still ample = 1
+  Result    : PASS
+  Why       : The upper_limit branch is a SECOND eviction path, separate from
+              the global victim search, and it is easy to forget that it
+              needs the same invalidation. It goes through the same
+              evict_frame() helper, so the notification fires and the
+              TLB is cleaned -- this case proves that, rather than
+              assuming it.
+
+TC-18  No evictable frame anywhere: MMU_FAULT_NO_FRAME
+==========================================================================
+  Input     : fault a new page when every frame is pinned
+  Setup     : all free frames taken as page-table frames; pid 1 sits at its lower_limit
+  Expected  : free frames            = 0
+              pid 1 frames_held      = 2
+              pid 1 lower_limit      = 3
+              mm_select_victim       = -1
+              status                 = FAULT: no evictable frame
+              pa_out untouched       = 286331153
+              disk reads             = 0
+              probe(pid 1, vpn 40)   = -1
+  Actual    : free frames            = 0
+              pid 1 frames_held      = 2
+              pid 1 lower_limit      = 3
+              mm_select_victim       = -1
+              status                 = FAULT: no evictable frame
+              pa_out untouched       = 286331153
+              disk reads             = 0
+              probe(pid 1, vpn 40)   = -1
+  Result    : PASS
+  Why       : The out-of-memory leaf of the flowchart, and the one path I had
+              previously left untested. Every allocated frame is a page
+              table (never evictable) and pid 1 is at its floor (2 held,
+              limit 3), so nothing may be taken. The MMU reports the
+              failure instead of violating a limit, leaves pa_out alone,
+              spends no disk I/O, and creates no TLB entry.
+
+TC-19  A spurious fault on an already-present page is a no-op
+==========================================================================
+  Input     : call mm_handle_fault(pid 1, page 1) -- page 1 is already resident
+  Setup     : page 1 was pre-paged
+  Expected  : return code            = 0
+              page faults added      = 0
+              disk reads added       = 0
+              frames_held added      = 0
+              frame unchanged        = 103
+  Actual    : return code            = 0
+              page faults added      = 0
+              disk reads added       = 0
+              frames_held added      = 0
+              frame unchanged        = 103
+  Result    : PASS
+  Why       : Real systems reach this after a TLB shootdown or two faults
+              racing on the same page. Treating it as a fresh fault
+              would allocate a SECOND frame for a page that already has
+              one -- leaking the first frame permanently and double
+              counting the fault.
+
+TC-20  Pre-paging fails cleanly when memory cannot supply 3 frames
+==========================================================================
+  Input     : mm_prepage(pid 1) with zero free frames
+  Setup     : every frame allocated before the process is created
+  Expected  : free frames            = 0
+              return code            = -1
+              page table left NULL   = 1
+              frames_held            = 0
+  Actual    : free frames            = 0
+              return code            = -1
+              page table left NULL   = 1
+              frames_held            = 0
+  Result    : PASS
+  Why       : A process that cannot get its 3 minimum frames must not start
+              half-initialised. Returning -1 with pt == NULL means the
+              later translate() call hits step [2] and reports
+              NO_PROCESS rather than dereferencing a null page table.
+
+TC-21  A dirty victim is written back, and its TLB entry dies
+==========================================================================
+  Input     : write page 3, fill memory, then fault page 80 so page 3 is the victim
+  Setup     : pid 1 holds pages 0-7; page 3 has been written to
+  Expected  : PTE[3].dirty           = 1
+              page 3 cached in TLB   = 1
+              disk write-backs       = 1
+              PTE[3].present after   = 0
+              probe(pid 1, vpn 3) after = -1
+              page 80 took frame     = 108
+  Actual    : PTE[3].dirty           = 1
+              page 3 cached in TLB   = 1
+              disk write-backs       = 1
+              PTE[3].present after   = 0
+              probe(pid 1, vpn 3) after = -1
+              page 80 took frame     = 108
+  Result    : PASS
+  Why       : Both consequences of one eviction. The page differs from disk,
+              so it is written back -- and because BOTH caches are
+              write-through, main memory already held the newest bytes,
+              so no cache flush was needed first. Meanwhile the TLB
+              entry must die or it would point at page 80's frame.
+
+TC-22  Process exit clears its TLB entries and frees its frames
+==========================================================================
+  Input     : pid 2 touches 6 pages, then terminates
+  Setup     : pid 1 and pid 2 both running, sharing the 32-entry TLB
+  Expected  : pid 2 TLB entries before = 6
+              pid 2 TLB entries after = 0
+              frames returned (6 pages + 1 page table) = 7
+              pid 1 still cached     = 1
+              pid 1 frames untouched = 4
+  Actual    : pid 2 TLB entries before = 6
+              pid 2 TLB entries after = 0
+              frames returned (6 pages + 1 page table) = 7
+              pid 1 still cached     = 1
+              pid 1 frames untouched = 4
+  Result    : PASS
+  Why       : The bulk invalidation the specification names explicitly. The
+              +1 frame is the page table, which replacement can never
+              touch -- exit is the ONLY path that frees it, so missing
+              this leaks a frame per terminated process. And the sweep
+              is PID-scoped: pid 1 keeps every entry and every frame.
+
+TC-23  KNOWN LIMITATION: revoking permission is invisible to a TLB hit
+==========================================================================
+  Input     : read page 20 (caches it), revoke write permission, then write to it
+  Setup     : pid 1 running; page 20 will be resident and TLB-cached
+  Expected  : status of the illegal write = OK (TLB hit)
+              PTE says writable      = 0
+              after invalidating the entry = FAULT: protection violation
+  Actual    : status of the illegal write = OK (TLB hit)
+              PTE says writable      = 0
+              after invalidating the entry = FAULT: protection violation
+  Result    : PASS
+  Why       : This test asserts the BUG, deliberately, so it is documented and
+              cannot regress silently. TLBImplEntry carries no prot bits,
+              and re-reading the PTE on every hit would cost a memory
+              access per reference and defeat the TLB entirely. So the
+              write is permitted until the entry is invalidated -- which
+              the driver's PROT directive does for exactly this reason.
+              Real fix: add 'prot : 3' to TLBImplEntry, which needs
+              TLB.h -- a file this work does not modify.
+
+========================================================================
+  23 test cases run, 23 passed, 0 failed
+========================================================================
+  >>> exit code = 0
+
+================================================================================
+$ gcc -Wall -Wextra -Wpedantic -g -I./include -o test_mm tests/test_mm.c src/MainMemory.c src/translate.c src/TLB.c
+  compile exit = 0  (no lines above = zero warnings)
+$ ./test_mm
+=================================================================
+  Main memory + address translation -- 32 MB, 1 KB pages
+=================================================================
+
+1.  Geometry -- a page table is exactly one frame
+----------------------------------------------------------------------
+    sizeof(PTE)       =  4 B   (29 bits packed into a uint32_t)
+    sizeof(PageTable) = 1024 B  = 256 PTEs x 4 B
+    sizeof(MainMemory)=  512 KB (FrameDesc x 32768 -- heap or static!)
+    pass  page table (1024 B) fits one 1024 B frame -- no multi-level walk needed
+
+2.  mm_init and frame accounting
+----------------------------------------------------------------------
+    pass  32 MB of storage allocated
+    pass  all 32768 frames free
+    pass  allocated frame 0
+    pass  free_frames dropped to 32767
+    pass  frame descriptor records pid 1, vpn 7
+
+3.  Pre-paging -- page table plus the first 2 pages
+----------------------------------------------------------------------
+    pass  mm_prepage(pid 1) succeeded
+    pass  page table is resident, in frame 1
+    pass  its frame is marked is_page_table (never evictable)
+    pass  the page table lives IN main memory, not beside it
+    pass  pages 0 and 1 are present
+    pass  page 2 is NOT -- demand paged
+    pass  frames_held = 2 (data pages only)
+    pass  3 frames consumed = 2 pages + 1 page table = MIN_FRAMES_PER_PROC
+    pass  pre-paging did not inflate the demand-fault count (0)
+
+4.  Happy path -- TLB miss, walk, then hit
+----------------------------------------------------------------------
+    pass  1st access: OK (TLB miss, PTE present)
+    pass  exactly 1 page-table walk = 1 memory access
+    pass  no page fault -- the page was pre-paged
+    pass  2nd access: OK (TLB hit)
+    pass  still 1 walk -- the TLB absorbed it
+    pass  same PA both times: 0x000E34
+    pass  page offset 0x234 passed through untranslated
+    pass  L1 tag == frame 3 -- L1 can index before translation finishes
+
+5.  Demand paging -- and the right page arrives
+----------------------------------------------------------------------
+    pass  page 37: OK (page fault serviced)
+    pass  exactly 1 disk read
+    pass  resident set grew to 3
+    pass  PTE 37 is now present
+    pass  the frame holds page 37 of pid 1 (marker 1/37)
+    pass  second access hits the TLB
+
+6.  Edge case -- virtual address outside the 18-bit space
+----------------------------------------------------------------------
+    pass  VA 0x40000: FAULT: address out of range
+    pass  *pa_out untouched on a fault
+    pass  rejected before any page-table access
+    pass  counted as an address fault
+    (without this check VA_VPN() would truncate 0x40000 to page 0)
+
+7.  Edge case -- protection violation, before any disk work
+----------------------------------------------------------------------
+    pass  write to a read-only page: FAULT: protection violation
+    pass  no disk read was wasted on it
+    pass  no frame was allocated for it
+    pass  the page is still absent
+    pass  reading the same page is allowed: OK (page fault serviced)
+    note: after this fill, protection is no longer re-checked on
+    a TLB hit -- TLBImplEntry has no prot bits (see translate.h)
+
+8.  Edge case -- unknown or inactive process
+----------------------------------------------------------------------
+    pass  pid 99 was never created: FAULT: process not runnable
+    pass  no Process record for pid 99
+
+9.  Writes set the PTE dirty bit
+----------------------------------------------------------------------
+    pass  page 37 starts clean
+    pass  write translated: OK (TLB hit)
+    pass  PTE 37 is dirty -- meaning dirty vs DISK; both caches are write-through so no cache holds newer bytes
+
+10.  LFU with aging -- the shift register
+----------------------------------------------------------------------
+    after 8 ticks: hot aging = 0xFF, cold aging = 0x00
+    pass  a page used every interval saturates at 0xFF
+    pass  an unused page decays to 0x00 -- LFU alone would have kept it forever on its old count
+    pass  the reference bit is cleared by the tick
+    pass  FrameDesc.aging mirrors PTE.aging, so victim search stays linear
+    pass  one touch puts a 1 in the MSB: 0x80
+    pass  and an idle interval shifts the hot page to 0x7F -- recency outranks raw frequency
+
+11.  Victim policy -- lowest aging, skip page tables, honour floors
+----------------------------------------------------------------------
+    pass  picked frame 18 -- the lowest aging (0x01)
+    pass  and it is not a page table
+    pass  at lower_limit=8, pid 1's pages are skipped (victim now -1)
+    pass  the victim no longer belongs to the pinned process
+    pass  page-table frames are never chosen even at aging 0x00
+
+12.  upper_limit forces a process to evict its own page
+----------------------------------------------------------------------
+    pass  resident set never exceeded upper_limit (peak 4)
+    pass  and sits at the cap: 4 frames
+    pass  memory was never short -- the cap alone forced the evictions
+    20 pages touched, 4 frames allowed: local replacement
+    inside an otherwise global policy
+
+13.  Frame reuse invalidates the TLB  <-- the correctness landmine
+----------------------------------------------------------------------
+    pass  page 4 is cached in the TLB, mapping frame 47
+    pass  main memory is full
+    pass  faulting page 60: OK (page fault serviced)
+    pass  the victim's PTE was cleared
+    pass  its TLB entry is GONE -- otherwise a hit would hand back frame 47, which now holds page 60
+    pass  1 TLB entries invalidated
+    pass  the cache layer was told to invalidate frame 47 too
+    pass  and page 60 was given exactly that frame -- the reuse is real
+    pass  TLB now maps page 60 -> frame 47
+
+14.  Cross-process eviction clears the VICTIM OWNER's PTE
+----------------------------------------------------------------------
+    pass  pid 1 faults: OK (page fault serviced)
+    pass  pid 1 took frame 57 from pid 2 (global replacement)
+    pass  pid 2's PTE for page 5 was cleared -- not pid 1's
+    pass  pid 2's resident set dropped 9 -> 8
+    pass  and pid 2's TLB entry for it is gone
+    without mm_set_process_table() the fault would have cleared
+    the WRONG page table and left pid 2 pointing at pid 1's page
+
+15.  Dirty victims are written back to disk
+----------------------------------------------------------------------
+    pass  page 3 is dirty
+    pass  1 write-back performed (1 total)
+    both caches are write-through, so main memory already held
+    the newest bytes -- no cache flush was needed first
+
+16.  Process exit releases frames and TLB entries
+----------------------------------------------------------------------
+    pass  pid 2 owns 8 TLB entries before exit
+    pass  10 data frames + 1 page-table frame returned (free 32750 -> 32761)
+    pass  the page-table frame is released -- only exit can free it, since replacement never touches it
+    pass  every pid-2 TLB entry is gone -- PIDs are 14 bits and get recycled, so this is mandatory
+    pass  pid 1 is completely unaffected
+    pass  pid 2 is torn down
+
+17.  Block reads and write-through arrivals
+----------------------------------------------------------------------
+    pass  1 block fetch counted
+    pass  1 write-through arrival counted
+    pass  the 4 written bytes are visible at block offset 0
+    pass  and nothing outside them changed
+
+--- MMU ---
+  accesses ................ 1
+  TLB hits / misses ....... 0 / 1   (hit ratio 0.00%)
+  page-table walks ........ 1   (= 1 uncached memory accesses)
+  page faults ............. 0   (0.000% of accesses)
+  protection faults ....... 0
+  address faults .......... 0
+  out-of-frame failures ... 0
+  frames reclaimed ........ 0
+  TLB entries invalidated . 0   (by frame reuse)
+--- Main memory ---
+  free frames ............. 32765 / 32768
+  page faults ............. 0
+  disk reads .............. 2
+  disk write-backs ........ 0
+  write-through arrivals .. 1
+  16 B block fetches ...... 2
+
+=================================================================
+  83 checks, 0 failed  --  ALL TESTS PASSED
+=================================================================
+  >>> exit code = 0
+
+================================================================================
+$ sh tests/mutate_tlb.sh
+================================================================
+  Mutation testing src/TLB.c against tests/test_tlb.c
+  KILLED = the bug was caught.  SURVIVED = a hole in the suite.
+================================================================
+
+  KILLED  M1  comparator ignores the PID (plain TLB, needs a flush per switch)
+            FAIL  both mappings coexist for the same VPN 0xA8
+            FAIL  pid 7 -> frame 0x2C0
+  KILLED  M2  select_victim always returns entry 0
+            FAIL  TLB is full (32 entries)
+            FAIL  no evictions while filling empty slots
+  KILLED  M3  touch() does not age the other entries
+            FAIL  LRU ranks form a permutation during fill                  (duplicate rank)
+            FAIL  LRU ranks form a permutation during fill                  (duplicate rank)
+  KILLED  M4  invalidate_pid matches nothing (dead PIDs keep their mappings)
+            FAIL  process 2's 5 entries were removed
+            FAIL  pid 2 vpn 0 lingers
+  KILLED  M5  insert skips the duplicate check (stale entry can shadow the new one)
+            FAIL  still exactly 1 valid entry
+            FAIL  the mapping was refreshed, not shadowed (pfn 0x111)
+  KILLED  M6  forget() skips the rank repair (ranks stay ordered but not a permutation)
+            FAIL  LRU ranks form a permutation after invalidate_entry       (gap in the rank sequence)
+            FAIL  LRU ranks form a permutation after invalidate_pid         (gap in the rank sequence)
+  KILLED  M7  invalidate_frame matches nothing (reused frame serves the old page)
+            FAIL  every mapping of frame 0x777 is gone, across all processes
+
+================================================================
+  killed 7, survived 0
+  every injected bug was caught by the suite
+================================================================
+  >>> exit code = 0

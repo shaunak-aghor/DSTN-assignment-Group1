@@ -1,0 +1,117 @@
+# ===========================================================================
+#  traces/demo.trace -- exercises every path through the MMU
+#
+#  Run:  ./sim_q3 -v traces/demo.trace
+#
+#  Addresses are 18-bit. Page = address >> 10, offset = address & 0x3FF.
+#  Page 0 = 0x00000, page 1 = 0x00400, page 2 = 0x00800, page 5 = 0x01400 ...
+# ===========================================================================
+
+# --- 1. create two processes -----------------------------------------------
+# PROC <pid> <lower_limit> <upper_limit>
+# pid 1 is capped at 6 resident frames so eviction happens without needing
+# to exhaust all 32768 frames of main memory.
+PROC 1 3 6
+PROC 2 3 256
+
+# --- 2. TLB miss then TLB hit ----------------------------------------------
+# Page 1 was pre-paged, so the first touch is a TLB miss whose page-table
+# walk finds the PTE already present: no disk read.
+R 1 0x00434              # page 1, offset 0x034 -> MMU_OK_TLB_MISS
+R 1 0x00438              # same page            -> MMU_OK (TLB hit)
+R 1 0x004FF              # still page 1         -> MMU_OK
+
+# --- 3. demand paging ------------------------------------------------------
+# Page 9 was never loaded: TLB miss -> walk -> PTE absent -> page fault.
+R 1 0x02534              # page 9  -> MMU_OK_PAGE_FAULT, 1 disk read
+R 1 0x02540              # page 9 again -> TLB hit, no walk
+
+# --- 4. a write marks the page dirty ---------------------------------------
+W 1 0x02544              # sets PTE.dirty, so eviction will cost a write-back
+
+# --- 5. protection fault ---------------------------------------------------
+PROT 1 12 r--            # page 12 becomes read-only
+W 1 0x03010              # write to it -> MMU_FAULT_PROTECTION
+R 1 0x03010              # read is fine -> page fault, page loaded
+
+# --- 6. address fault ------------------------------------------------------
+R 1 0x40000              # 2^18: one past the end of the address space
+
+# --- 7. unknown process ----------------------------------------------------
+R 7 0x00400              # pid 7 was never created
+
+# --- 8. upper_limit forces eviction ----------------------------------------
+# pid 1 may hold only 6 frames. Touching more pages makes it evict its own
+# coldest page each time -- local replacement inside a global policy.
+R 1 0x04000              # page 16
+R 1 0x04400              # page 17
+R 1 0x04800              # page 18
+R 1 0x04C00              # page 19
+R 1 0x05000              # page 20
+R 1 0x05400              # page 21
+
+# --- 9. aging ---------------------------------------------------------------
+# Reference one page, then tick: its aging register gets a 1 in the MSB while
+# every other page shifts right.
+R 1 0x04000
+TICK
+TICK
+
+# --- 10. the second process, and PID tagging --------------------------------
+# pid 2 uses the SAME virtual pages as pid 1. Because every TLB entry carries
+# its owner's PID, both sets of mappings coexist and no flush is needed.
+R 2 0x00434
+R 2 0x02534
+W 2 0x04000
+R 1 0x00434              # pid 1's mapping is still there
+R 2 0x00434              # and so is pid 2's
+
+# --- 11. fill the TLB past 32 entries ---------------------------------------
+# 40 distinct pages in one process: the last 8 evict the least recently used
+# TLB entries. The page table is untouched -- only the TLB is under pressure.
+R 2 0x08000
+R 2 0x08400
+R 2 0x08800
+R 2 0x08C00
+R 2 0x09000
+R 2 0x09400
+R 2 0x09800
+R 2 0x09C00
+R 2 0x0A000
+R 2 0x0A400
+R 2 0x0A800
+R 2 0x0AC00
+R 2 0x0B000
+R 2 0x0B400
+R 2 0x0B800
+R 2 0x0BC00
+R 2 0x0C000
+R 2 0x0C400
+R 2 0x0C800
+R 2 0x0CC00
+R 2 0x0D000
+R 2 0x0D400
+R 2 0x0D800
+R 2 0x0DC00
+R 2 0x0E000
+R 2 0x0E400
+R 2 0x0E800
+R 2 0x0EC00
+R 2 0x0F000
+R 2 0x0F400
+R 2 0x0F800
+R 2 0x0FC00
+
+DUMP                     # the TLB is now full of pid 2 entries
+
+# --- 12. instruction fetch --------------------------------------------------
+X 2 0x00000              # page 0, execute permission
+
+# --- 13. process termination ------------------------------------------------
+# Every frame pid 2 holds is released, its page-table frame with them, and
+# every TLB entry carrying PID 2 is invalidated. This is the ONLY bulk TLB
+# invalidation an identifier-based TLB needs.
+EXIT 2
+
+R 1 0x00434              # pid 1 is completely unaffected
+DUMP

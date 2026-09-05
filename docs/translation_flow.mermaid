@@ -1,0 +1,126 @@
+---
+title: "Virtual to physical address resolution — TLB, page table, main memory"
+---
+flowchart TD
+
+    START(["CPU issues a reference<br/>pid, 18-bit VA, access type R/W/X"]) --> D1
+
+    D1{"VA less than 2^18?"}
+    D1 -- "no" --> F_ADDR(["MMU_FAULT_ADDRESS<br/>outside the 256 KB address space<br/>caught here, or VA_VPN would<br/>silently truncate it to 8 bits"])
+    D1 -- "yes" --> SPLIT
+
+    SPLIT["Split the address<br/>VPN = VA bits 17..10  (8 bits)<br/>offset = VA bits 9..0  (10 bits)"] --> D2
+
+    D2{"process active and<br/>page table resident?"}
+    D2 -- "no" --> F_PROC(["MMU_FAULT_NO_PROCESS"])
+    D2 -- "yes" --> TLB
+
+    TLB["TLB LOOKUP<br/>compare all 32 entries in parallel<br/>on the PAIR (PID, VPN)<br/><i>the PID half is why a context<br/>switch needs no flush</i>"] --> D3
+
+    D3{"TLB hit?"}
+    D3 -- "HIT" --> TLBHIT["Update LRU counters<br/>hit entry rank to 0,<br/>entries ahead of it age by 1"]
+    TLBHIT --> HAVEFRAME
+    D3 -- "MISS" --> WALK
+
+    %% ------------------------------------------------ page-table walk
+    WALK["PAGE TABLE WALK<br/>read PTE number VPN from the<br/>process page table<br/><b>COST: 1 real memory access</b><br/>page tables are never cached;<br/>256 PTEs = 1 KB = one frame,<br/>so it is a single indexed read"] --> D4
+
+    D4{"PTE.prot permits<br/>this access type?"}
+    D4 -- "no" --> F_PROT(["MMU_FAULT_PROTECTION<br/>checked BEFORE any frame or<br/>disk work is done"])
+    D4 -- "yes" --> D5
+
+    D5{"PTE.present?"}
+    D5 -- "yes" --> FILLTLB
+    D5 -- "no" --> PF
+
+    %% ------------------------------------------------ page fault
+    PF["PAGE FAULT<br/>trap to the OS"] --> D6
+
+    D6{"frames_held greater than or<br/>equal to upper_limit?"}
+    D6 -- "yes, at the cap" --> OWNVICT["Choose this process's OWN<br/>coldest page<br/><i>local replacement forced by<br/>the per-process cap</i>"]
+    OWNVICT --> EVICT
+    D6 -- "no" --> D7
+
+    D7{"a free frame exists?"}
+    D7 -- "yes" --> ALLOC
+    D7 -- "no" --> GLOBAL
+
+    GLOBAL["GLOBAL VICTIM SEARCH<br/>LFU with aging: smallest aging<br/>register wins, freq breaks ties<br/><br/>SKIP page-table frames<br/>SKIP any process already at<br/>its lower_limit"] --> D8
+
+    D8{"victim found?"}
+    D8 -- "no" --> F_FRAME(["MMU_FAULT_NO_FRAME<br/>every frame is a page table<br/>or is pinned by a lower_limit"])
+    D8 -- "yes" --> EVICT
+
+    EVICT["EVICT THE VICTIM"] --> D9
+
+    D9{"victim PTE dirty?"}
+    D9 -- "yes" --> WB["Write the page to disk<br/>disk_writebacks++<br/><i>both caches are write-through,<br/>so memory already holds the<br/>newest bytes: no cache flush</i>"]
+    WB --> CLEAR
+    D9 -- "no" --> CLEAR
+
+    CLEAR["Clear the VICTIM OWNER's PTE<br/>present = 0, frames_held--<br/><i>the owner may be a DIFFERENT<br/>process: replacement is global</i>"] --> INV_TLB
+
+    INV_TLB["Invalidate every TLB entry<br/>mapping that frame,<br/>across all processes"] --> INV_CACHE
+
+    INV_CACHE["Invalidate the cache lines<br/>L1: every line with tag == f<br/>L2: tag == f/4, sets<br/>((f AND 3) x 64) + 0..63<br/><b>mandatory: L1 and L2 are<br/>physically tagged, so a survivor<br/>would serve the OLD page</b>"] --> FREED
+
+    FREED["Frame released"] --> ALLOC
+
+    ALLOC["mm_alloc_frame:<br/>take the frame, zero it"] --> LOAD
+
+    LOAD["Read the page in from disk<br/>disk_reads++"] --> UPDATE
+
+    UPDATE["Update the PTE<br/>present = 1, frame = f<br/>dirty = 0, referenced = 1<br/>aging = 0x80<br/>frames_held++"] --> FILLTLB
+
+    %% ------------------------------------------------ TLB fill
+    FILLTLB{"entry for (PID, VPN)<br/>already in the TLB?"}
+    FILLTLB -- "yes" --> REFRESH["Refresh it in place<br/><i>never two entries for one pair</i>"]
+    REFRESH --> MRU
+    FILLTLB -- "no" --> D11
+
+    D11{"TLB full?<br/>all 32 entries valid"}
+    D11 -- "yes" --> TLBEVICT["Evict the LRU entry<br/>the one holding rank 31"]
+    TLBEVICT --> MRU
+    D11 -- "no" --> TLBFREE["Use a free entry"]
+    TLBFREE --> MRU
+
+    MRU["Write valid, PID, VPN, frame<br/>and promote it to rank 0 = MRU"] --> HAVEFRAME
+
+    %% ------------------------------------------------ resolution
+    HAVEFRAME["FRAME NUMBER RESOLVED<br/>15 bits"] --> BUILD
+
+    BUILD["PA = frame (15 bits) followed by<br/>offset (10 bits) = 25 bits<br/><i>the offset was never translated</i>"] --> MARK
+
+    MARK["PTE.referenced = 1<br/>frame LFU freq++"] --> D12
+
+    D12{"is it a write?"}
+    D12 -- "yes" --> DIRTY["PTE.dirty = 1<br/><i>dirty vs DISK, not vs cache</i>"]
+    DIRTY --> OUT
+    D12 -- "no" --> OUT
+
+    OUT(["PHYSICAL ADDRESS delivered to<br/>the cache hierarchy<br/>L1 look-aside, L2 look-through,<br/>exclusive, both write-through"])
+
+    %% ------------------------------------------------ side notes
+    subgraph PARALLEL ["Runs concurrently with the TLB lookup"]
+        VIPT["L1 index (6) + block offset (4) = 10 bits<br/>= exactly the page offset, which translation<br/>never changes. So the L1 set is already being<br/>read while the TLB translates, and the 15-bit<br/>L1 tag IS the frame number the TLB returns.<br/><br/>L2 index (8) + offset (4) = 12 bits, which<br/>reaches 2 bits into the frame number, so L2<br/>cannot start until translation completes."]
+    end
+
+    subgraph PERIODIC ["On the replacement timer, not per access"]
+        TICK["mm_age_tick: for every resident page<br/>aging = (aging shifted right 1) with the<br/>reference bit placed in the MSB,<br/>then clear the reference bit;<br/>halve the frame's freq counter"]
+    end
+
+    subgraph EXITPATH ["On process termination"]
+        EX["Release every frame the process holds,<br/>including its page-table frame, which<br/>replacement can never touch.<br/>Invalidate every TLB entry carrying its PID.<br/>Mandatory: PIDs are 14 bits and get recycled."]
+    end
+
+    classDef fault fill:#c0392b,stroke:#7b241c,color:#ffffff
+    classDef good fill:#1e8449,stroke:#145a32,color:#ffffff
+    classDef costly fill:#b9770e,stroke:#7e5109,color:#ffffff
+    classDef critical fill:#7d3c98,stroke:#4a235a,color:#ffffff
+    classDef note fill:#ebedef,stroke:#85929e,color:#1b2631
+
+    class F_ADDR,F_PROC,F_PROT,F_FRAME fault
+    class OUT,START good
+    class WALK,LOAD,WB,PF costly
+    class INV_TLB,INV_CACHE,CLEAR critical
+    class VIPT,TICK,EX note

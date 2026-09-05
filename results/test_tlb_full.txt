@@ -1,0 +1,120 @@
+=========================================================================
+  TLB -- exhaustive scenario coverage
+  boundary values, field truncation, PID reuse, differential testing
+=========================================================================
+
+S1   Boundary: the first and last page of an address space
+------------------------------------------------------------------------
+     ok   vpn 0 (first page) maps to frame 0x111
+     ok   vpn 255 (last page) maps to frame 0x222
+     ok   they occupy different entries -- vpn 0 is not confused with 255
+     => scenario passed
+
+S2   Boundary: lowest and highest PID the 14-bit field can hold
+------------------------------------------------------------------------
+     ok   pid 1 -> frame 0x300
+     ok   pid 16383 (2^14 - 1) -> frame 0x400
+     ok   both survive: the PID field holds its full range
+     => scenario passed
+
+S3   Boundary: frame 0 and the last frame in 32 MB
+------------------------------------------------------------------------
+     ok   frame 0 survives the round trip (a zero pfn is legal)
+     ok   frame 32767 survives -- the 15-bit field is not one bit short
+     => scenario passed
+
+S4   Field truncation is CONSISTENT between insert and probe
+------------------------------------------------------------------------
+     ok   vpn 300 is found again under vpn 300
+     ok   and under its masked form 44 -- same entry, no split
+     ok   pfn 32768 + 5 masks to 5 -- and stays masked on read
+     ok   a stored frame is ALWAYS a legal frame number
+     => scenario passed
+
+S5   PID recycling: a new process must not inherit a dead one's TLB
+------------------------------------------------------------------------
+     ok   pid 5 has its mappings cached
+     ok   the new pid 5 inherits NOTHING -- all 4 lookups miss
+          PID_BITS = 14, so only 16384 identifiers exist and
+          recycling is inevitable in a long run. Without the
+          invalidation on exit, the new process would read the
+          dead process's frames -- a total protection failure.
+     ok   and establishes its own mapping for vpn 2 -> 0x999
+     => scenario passed
+
+S6   Negative control: the same sequence WITHOUT the invalidation
+------------------------------------------------------------------------
+     ok   the stale entries ARE still reachable -- confirming the previous scenario tested something real, not a tautology
+     => scenario passed
+
+S7   Churn on a single mapping never grows or evicts
+------------------------------------------------------------------------
+     ok   exactly 1 valid entry after 1000 inserts
+     ok   0 evictions (0)
+     ok   and it holds the newest frame 0x807
+     => scenario passed
+
+S8   Scattered invalidation then refill reuses holes, never evicts
+------------------------------------------------------------------------
+     ok   11 holes refilled with 0 evictions (0)
+     ok   TLB is full again (32 entries)
+     => scenario passed
+
+S9   Statistics stay self-consistent under a mixed workload
+------------------------------------------------------------------------
+     ok   hits (689) + misses (2690) == lookups (3379)
+     ok   evictions (1288) never exceed the inserts that caused them
+     => scenario passed
+
+S10  Differential: pressure -- working set 4x the TLB
+------------------------------------------------------------------------
+     ok   4 pids x 32 pages           200000 ops  (119796 lookups, 18.5% hit | 60290 inserts | 19914 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S11  Differential: fits -- working set smaller than the TLB
+------------------------------------------------------------------------
+     ok   2 pids x 8 pages            100000 ops  (70219 lookups, 57.2% hit | 24729 inserts | 5052 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   100,000 operations, no divergence
+     => scenario passed
+
+S12  Differential: invalidation-heavy -- constant paging churn
+------------------------------------------------------------------------
+     ok   8 pids, 40% invalidations   200000 ops  (59776 lookups, 2.7% hit | 60061 inserts | 80163 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S13  Differential: single hot page -- degenerate locality
+------------------------------------------------------------------------
+     ok   1 pid x 1 page               50000 ops  (24806 lookups, 85.7% hit | 20192 inserts | 5002 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   50,000 operations, no divergence
+     => scenario passed
+
+S14  Differential: exactly TLB-sized working set (the boundary)
+------------------------------------------------------------------------
+     ok   1 pid x 32 pages            200000 ops  (130607 lookups, 46.2% hit | 59361 inserts | 10032 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+S15  Differential: one page more than the TLB holds
+------------------------------------------------------------------------
+     ok   1 pid x 33 pages            200000 ops  (129659 lookups, 45.9% hit | 60409 inserts | 9932 invalidations)
+          every operation agreed with the reference model on
+          hit/miss, frame, resident set AND recency order
+     ok   200,000 operations, no divergence
+     => scenario passed
+
+=========================================================================
+  15 scenarios run, 15 passed, 0 failed
+  differential coverage: 950,000 operations against a reference model
+=========================================================================
