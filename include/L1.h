@@ -8,9 +8,9 @@
 
 typedef struct {
     uint32_t  valid : 1;            /*1 bit*/
-    uint32_t tag : 15;              /*15 bits*/
+    uint32_t  tag : 15;              /*15 bits*/
     uint32_t  lru : 2;              /*2 bits -- 0 = most recently used*/
-    uint8_t  data[BLOCK_SIZE];      /*128 bits, uint8_t as 1-byte type*/
+    uint8_t   data[BLOCK_SIZE];      /*128 bits, uint8_t as 1-byte type*/
 } L1Line;
 
 typedef struct {
