@@ -119,12 +119,11 @@ static void l1_free_way(L1Set *set, int way)
             set->ways[j].lru--;
 }
 
-/* Copies the victim out and frees the way.  Returns 1 if a line was evicted,
- * 0 if the way was already free.  The caller MUST then enqueue it into the
- * write buffer: L1 and L2 are exclusive, so a block dropped here and not
- * buffered is lost.  Victims are always clean, so they never go to memory. */
-int l1_evict(L1Cache *l1, uint32_t index, int way,
-             uint32_t *out_pa, uint8_t *out_block)
+/* Hands the victim's block base back through out_pa and frees the way.
+ * Returns 1 if a line was evicted, 0 if the way was already free.  The caller
+ * MUST give a returned block a home in L2: L1 and L2 are exclusive, so a block
+ * dropped here and placed nowhere is lost. */
+int l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa)
 {
     L1Set  *set;
     L1Line *line;
@@ -140,10 +139,63 @@ int l1_evict(L1Cache *l1, uint32_t index, int way,
 
     if (out_pa)
         *out_pa = L1_MAKE_PA(line->tag, index);
-    if (out_block)
-        memcpy(out_block, line->data, BLOCK_SIZE);
 
     l1_free_way(set, way);
-    l1->evictions++;
     return 1;
+}
+
+/* Installs pa into its set.  Call after l1_evict has freed a way, which is
+ * what makes the placement case the normal one.
+ *   -1  nothing installed: NULL cache, or l1_select_victim failed
+ *    0  placement   -- the chosen way was free
+ *    1  replacement -- the chosen way held a valid line, now overwritten
+ * A 1 means the caller skipped the evict, and the overwritten block was
+ * handed to nobody.  Under the evict-first sequence it should never happen. */
+int l1_install(L1Cache *l1, uint32_t pa)
+{
+    uint32_t index;
+    int      way;
+    int      replaced;
+    L1Line  *line;
+
+    if (l1 == NULL)
+        return -1;
+
+    index = L1_INDEX(pa);
+    way   = l1_select_victim(l1, index);
+
+    if (way < 0)
+        return -1;
+
+    line     = &l1->sets[index].ways[way];
+    replaced = line->valid ? 1 : 0;
+
+    line->valid = 1;
+    line->tag   = L1_TAG(pa);
+
+    line->lru = L1_WAYS - 1;    /* enter as oldest, then promote */
+    l1_age(l1, index, way);
+
+    return replaced;
+}
+
+/* A store that hit in L1.  With no data to patch and no dirty bit, all this
+ * does is promote the line -- the store itself reaches memory through the
+ * write buffer, which main enqueues.  The tag check makes the header's "donot
+ * bring miss to this" enforceable rather than a convention. */
+void l1_write_hit(L1Cache *l1, uint32_t pa, int way)
+{
+    uint32_t index;
+    L1Line  *line;
+
+    if (l1 == NULL || way < 0 || way >= L1_WAYS)
+        return;
+
+    index = L1_INDEX(pa);       /* masked to 6 bits, always a valid set */
+    line  = &l1->sets[index].ways[way];
+
+    if (!line->valid || line->tag != L1_TAG(pa))
+        return;                 /* not a hit -- the caller must probe first */
+
+    l1_age(l1, index, way);
 }

@@ -4,13 +4,13 @@
 #include <stdint.h>
 #include "MemHier.h"
 
-/*Line layout = 146 bits = valid 1 + tag 15 + LRU 2 + data 128*/
+/*Line layout = 18 bits = valid 1 + tag 15 + LRU 2
+ *The hierarchy tracks tags only, there is no data payload anywhere.*/
 
 typedef struct {
     uint32_t  valid : 1;            /*1 bit*/
     uint32_t  tag : 15;              /*15 bits*/
     uint32_t  lru : 2;              /*2 bits -- 0 = most recently used*/
-    uint8_t   data[BLOCK_SIZE];      /*128 bits, uint8_t as 1-byte type*/
 } L1Line;
 
 typedef struct {
@@ -41,15 +41,15 @@ void l1_age(L1Cache *l1, uint32_t index, int way);
 /*Returns whichever index either is invalid/empty or is LRU, always returns something. TODO*/
 int  l1_select_victim(L1Cache *l1, uint32_t index);
 
-/*Adds a block and marks it as MRU, does the LRU math, to be used after evictions. TODO*/
-void l1_install(L1Cache *l1, uint32_t pa, const uint8_t *block);
+/*Adds a block and marks it as MRU, does the LRU math, to be used after evictions.
+ *Returns -1 on failure, 0 for a placement (the way was free) and 1 for a
+ *replacement (the way still held a valid line, which is overwritten). DONE*/
+int  l1_install(L1Cache *l1, uint32_t pa);
 
 /*Applies a store on a write hit, donot bring miss to this. TODO*/
-void l1_write_hit(L1Cache *l1, uint32_t pa, int way,
-                  const uint8_t *bytes, uint32_t len);
+void l1_write_hit(L1Cache *l1, uint32_t pa, int way);
 
-/*Full eviction function, has to handle EVERYTHING with the l1 side of evicts. TODO*/
-int  l1_evict(L1Cache *l1, uint32_t index, int way,
-              uint32_t *out_pa, uint8_t *out_block);
+/*Full eviction function, has to handle EVERYTHING with the l1 side of evicts. DONE*/
+int  l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa);
 
 #endif

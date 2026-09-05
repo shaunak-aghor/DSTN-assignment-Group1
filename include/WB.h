@@ -4,33 +4,34 @@
 #include <stdint.h>
 #include "MemHier.h"
 
+/*
+ * Write buffer: 4 entries, FIFO, sits between L1 and main memory.
+ * L1 is write-through and has no dirty bit, so every store is queued here
+ * and drains to main memory.  Evictions do NOT pass through the buffer --
+ * the L1<->L2 exchange is handled entirely by l2_promote.
+ * The hierarchy tracks tags and addresses only, so an entry carries no data.
+ * Entry layout -- 22 bits: valid 1 + block_addr 21
+ */
+
 #define WB_ADDR_BITS    21
 
-/* Convert between a physical address and a stored block address */
+/* Convert between a physical address and a stored block address.
+ * WB_TO_PA returns the BLOCK BASE, not the original byte address. */
 #define WB_BLOCK_ADDR(pa)   (((pa) >> L1_OFFSET_BITS) & MASK(WB_ADDR_BITS))
 #define WB_TO_PA(ba)        (((uint32_t)(ba)) << L1_OFFSET_BITS)
 
-typedef enum {
-    WB_STORE    = 0,
-    WB_EVICTION = 1
-} WBType;
-
 typedef struct {
-    uint32_t valid      : 1;    /* 1   bit  */
-    uint32_t type       : 1;    /* 1   bit WBType */
-    uint32_t offset     : 4;    /* 4   bits offset within block */
-    uint32_t block_addr : 21;   /* 21  bits PA with offset dropped */
-    uint8_t  data[BLOCK_SIZE];  /* 128 bits payload */
-} WBEntry;                      /* 155 bits */
+    uint32_t valid      : 1;    /*  1 bit  */
+    uint32_t block_addr : 21;   /* 21 bits -- PA with the offset dropped */
+} WBEntry;                      /* 22 bits */
 
 typedef struct {
     WBEntry entries[WB_ENTRIES];
-    uint8_t count;         
-    /* statistics */
+    uint8_t count;
+    /* statistics -- incremented by main, never by this module */
     uint64_t enqueued_stores;
-    uint64_t enqueued_evictions;
     uint64_t drains;
-    uint64_t full_stalls;       /* forced drains caused by a full buffer */
+    uint64_t full_stalls;       /* stores that arrived at a full buffer */
     uint64_t forwards;          /* reads satisfied by a buffer hit */
 } WriteBuffer;
 
@@ -47,18 +48,17 @@ static inline int wb_is_empty(const WriteBuffer *wb) {
     return wb->count == 0;
 }
 
-/*TODO*/
-int wb_enqueue_store(WriteBuffer *wb, uint32_t pa, const uint8_t *bytes,
-                     void *ctx, void (*sink)(void *ctx, const WBEntry *e));
-int wb_enqueue_eviction(WriteBuffer *wb, uint32_t pa, const uint8_t *block,
-                        void *ctx, void (*sink)(void *ctx, const WBEntry *e));
+/* Appends at the tail.  Returns 1 if queued, 0 if the buffer was full and the
+ * store was NOT queued -- the caller must drain the head and retry, and it is
+ * the caller that counts the stall. DONE */
+int wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
 
 /*Removes head entry into *out and shifts the rest down. DONE*/
 int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 
-/*Drains every entry through `sink`, in order. DONE*/
-void wb_flush_all(WriteBuffer *wb, void *ctx,
-                  void (*sink)(void *ctx, const WBEntry *e));
+/*Drains every entry through `sink`, in order. Returns how many. DONE*/
+int wb_flush_all(WriteBuffer *wb, void *ctx,
+                 void (*sink)(void *ctx, const WBEntry *e));
 
 /*Compare for a hit, else return -1, try parallel. DONE*/
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
