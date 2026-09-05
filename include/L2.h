@@ -49,6 +49,7 @@ int  l2_probe(L2Cache *l2, uint32_t pa);
 /*Copies the block out and marks it invalid, returns 0 if address not present. TODO*/
 void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
 
+uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);
 
 /*Handles allocation of way if invalid or FIFO, donot touch for stores. TODO*/
 void l2_allocate(L2Cache *l2, uint32_t pa, const uint8_t *block);
