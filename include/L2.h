@@ -20,7 +20,6 @@
 typedef struct {
     uint16_t valid : 1;            /*1 bit*/
     uint16_t tag : 13;              /*13 bits */
-    uint8_t  data[BLOCK_SIZE];      /*128 bits */
 } L2Line;
 
 typedef struct {
@@ -48,16 +47,14 @@ void l2_reset_stats(L2Cache *l2);
 int  l2_probe(L2Cache *l2, uint32_t pa);
 
 /*Copies the block out and marks it invalid, returns 0 if address not present. TODO*/
-int  l2_promote(L2Cache *l2, uint32_t pa, uint8_t *out_block);
+void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
 
-/*Invalidates in case a promote isnt needed. TODO*/
-void l2_invalidate(L2Cache *l2, uint32_t pa);
 
 /*Handles allocation of way if invalid or FIFO, donot touch for stores. TODO*/
 void l2_allocate(L2Cache *l2, uint32_t pa, const uint8_t *block);
 
 /*Returns 1 if a line was updated, 0 otherwise. Call only on write misses from L1. TODO*/
-int  l2_write_through(L2Cache *l2, uint32_t pa, const uint8_t *bytes, uint32_t len);
+int  l2_write_through(L2Cache *l2, uint32_t pa, uint32_t len);
 
 /*Returns an invalid way if the set has one, else the way the curr FIFO pointer index. TODO*/
 int  l2_select_victim(L2Cache *l2, uint32_t index);
