@@ -3,28 +3,29 @@
 
 #include <stdint.h>
 #include "MemHier.h"
+#include "L1.h"
 
 /*
  * L2 cache: 32 KB, 16 B block, 8-way set associative.
  * Physically indexed, physically tagged.
- * Replacement: FIFO, one pointer PER SET (not per line).
+ * Replacement: FIFO, 8x8 bit matrix per set (triangular state matrix).
  * Writes: write-through. Every write reaches MM at write time.
  * no dirty check, no stall, no write-back.
  * Exclusive with L1: a block promoted to L1 is invalidated here.
- * Line layout -- 142 bits:
- *   valid 1 + tag 13 + data 128
- * Set metadata -- 3 bits:
- *   fifo_ptr 3
+ * Line layout -- 14 bits:
+ *   valid 1 + tag 13
+ * Set metadata:
+ *   fifo_matrix 8 bytes (row i, bit j = 1 if way i younger than way j)
  */
 
 typedef struct {
-    uint16_t valid : 1;            /*1 bit*/
-    uint16_t tag : 13;              /*13 bits */
+    uint16_t valid : 1;            /* 1 bit */
+    uint16_t tag   : 13;           /* 13 bits */
 } L2Line;
 
 typedef struct {
     L2Line  ways[L2_WAYS];
-    uint8_t fifo_ptr;               /* 3 bits -- next victim way, 0..7 */
+    uint8_t fifo_matrix[L2_WAYS];   /* 8x8 bit matrix */
 } L2Set;
 
 typedef struct {
@@ -51,13 +52,16 @@ void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
 
 uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);
 
+/*Does FIFO aging on insertion: increments valid lines' counters, drops touched way to 0. TODO*/
+void l2_age(L2Cache *l2, uint32_t index, int way);
+
 /*Handles allocation of way if invalid or FIFO, donot touch for stores. TODO*/
-void l2_allocate(L2Cache *l2, uint32_t pa, const uint8_t *block);
+void l2_allocate(L2Cache *l2, uint32_t pa);
 
 /*Returns 1 if a line was updated, 0 otherwise. Call only on write misses from L1. TODO*/
 int  l2_write_through(L2Cache *l2, uint32_t pa, uint32_t len);
 
-/*Returns an invalid way if the set has one, else the way the curr FIFO pointer index. TODO*/
+/*Returns an invalid way if the set has one, else the way with the oldest FIFO counter. TODO*/
 int  l2_select_victim(L2Cache *l2, uint32_t index);
 
 #endif
