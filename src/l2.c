@@ -24,6 +24,9 @@ void l2_reset_stats(L2Cache *l2)
     l2->updated_writes = 0;
 }
 
+/* Pure lookup: hits/misses are counted by the caller, not here.  A probe that
+ * counted would be unsafe to cancel and would tally accesses L1 already
+ * absorbed, so l2->hits/misses record only accesses that truly reached L2. */
 int l2_probe(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;
@@ -41,12 +44,10 @@ int l2_probe(L2Cache *l2, uint32_t pa)
 
         if (line->valid && line->tag == tag)
         {
-            l2->hits++;
             return way;
         }
     }
 
-    l2->misses++;
     return -1;
 }
 
