@@ -1,11 +1,16 @@
 /* ============================================================================
  *  src/new_main.c -- driver.
  *
- *      ./sim_q3 <num_processes> <accesses_per_context_switch>
+ *      ./sim_q3 <num_processes> <accesses_per_context_switch> <trace file>
  *
- *  One benchmark trace per process, run round robin.  Each trace line is a
- *  bare hex virtual address; the traces carry no read/write information, so
- *  the access type is synthesised deterministically at WRITE_PERCENT.
+ *  ONE address stream, time sliced across N processes.  The trace is walked
+ *  once from start to finish; every <accesses_per_context_switch> accesses the
+ *  running PID advances, so each process sees a different slice of it through
+ *  its own address space and page table.
+ *
+ *  Each trace line is a bare hex virtual address.  The traces carry no
+ *  read/write information, so the access type is synthesised deterministically
+ *  at WRITE_PERCENT.
  *
  *  The driver owns the ORDER of operations.  Each module does one thing and
  *  hands back what the next one needs:
@@ -43,15 +48,7 @@
 #ifndef PROC_LOWER_LIMIT
 #define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC                */
 #endif
-#define MAX_PROCS          5       /* one per benchmark trace                */
-
-static const char *TRACE_FILES[MAX_PROCS] = {
-    "traces/2026_27_ISEM_CC1.txt",
-    "traces/2026_27_ISEM_LI.txt",
-    "traces/2026_27_ISEM_APSI.txt",
-    "traces/2026_27_ISEM_M88KSIM.txt",
-    "traces/2026_27_ISEM_VORTEX.txt",
-};
+#define MAX_PROCS          16      /* upper bound on the CLI argument        */
 
 /* ---- the machine ------------------------------------------------------- */
 static MM          mm;                  /* ~320 KB -- never a stack local */
@@ -168,7 +165,7 @@ static double pct(uint64_t part, uint64_t whole)
     return whole ? (100.0 * (double)part / (double)whole) : 0.0;
 }
 
-static void report(uint16_t nproc, uint64_t quantum)
+static void report(uint16_t nproc, uint64_t quantum, const char *trace)
 {
     uint64_t l1_acc = l1.read_hits + l1.read_misses + l1.write_hits + l1.write_misses;
     uint64_t l1_hit = l1.read_hits + l1.write_hits;
@@ -176,6 +173,7 @@ static void report(uint16_t nproc, uint64_t quantum)
     uint64_t tlb_acc = tlb.hits + tlb.misses;
 
     printf("\n================ RUN ================\n");
+    printf("  trace %s\n", trace);
     printf("  processes %u   switch every %llu accesses   %d%% writes\n",
            nproc, (unsigned long long)quantum, WRITE_PERCENT);
     printf("  accesses %llu   reads %llu (%.1f%%)   writes %llu (%.1f%%)\n",
@@ -238,29 +236,39 @@ static void report(uint16_t nproc, uint64_t quantum)
 /* ------------------------------------------------------------------------ */
 int main(int argc, char **argv)
 {
-    FILE    *fp[MAX_PROCS];
-    int      done[MAX_PROCS];
-    uint16_t nproc, cur;
-    uint64_t quantum, in_quantum;
-    int      alive, oom = 0;
-    WBEntry  e;
+    const char *trace;
+    FILE       *fp;
+    uint16_t    nproc, cur;
+    uint64_t    quantum, in_quantum;
+    int         oom = 0;
+    char        line[64];
+    WBEntry     e;
 
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <num_processes> <accesses_per_context_switch>\n",
-                argv[0]);
+    if (argc != 4) {
+        fprintf(stderr,
+                "usage: %s <num_processes> <accesses_per_context_switch> <trace file>\n"
+                "   e.g. %s 5 10 traces/2026_27_ISEM_CC1.txt\n",
+                argv[0], argv[0]);
         return 2;
     }
 
     nproc   = (uint16_t)strtoul(argv[1], NULL, 10);
     quantum = strtoull(argv[2], NULL, 10);
+    trace   = argv[3];
 
     if (nproc < 1 || nproc > MAX_PROCS) {
-        fprintf(stderr, "num_processes must be 1..%d (one per trace)\n", MAX_PROCS);
+        fprintf(stderr, "num_processes must be 1..%d\n", MAX_PROCS);
         return 2;
     }
     if (quantum < 1) {
         fprintf(stderr, "accesses_per_context_switch must be >= 1\n");
         return 2;
+    }
+
+    fp = fopen(trace, "r");
+    if (!fp) {
+        fprintf(stderr, "cannot open %s\n", trace);
+        return 1;
     }
 
     /* --- bring the machine up ------------------------------------------ */
@@ -278,53 +286,30 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "OUT OF MEMORY: could not seat process %u.  Too many "
                     "processes for %d frames.\n", i + 1, NUM_FRAMES);
+            fclose(fp);
             return 1;
         }
-
-        fp[i] = fopen(TRACE_FILES[i], "r");
-        if (!fp[i]) {
-            fprintf(stderr, "cannot open %s\n", TRACE_FILES[i]);
-            return 1;
-        }
-        done[i] = 0;
-        printf("  process %u  <- %-34s  page table in frame %u\n",
-               procs[i].pid, TRACE_FILES[i], procs[i].pt_frame);
+        printf("  process %u created  (page table pinned in frame %u, "
+               "pages 0-1 pre-paged)\n", procs[i].pid, procs[i].pt_frame);
     }
+    printf("  trace %s, switching PID every %llu accesses\n\n",
+           trace, (unsigned long long)quantum);
 
-    /* --- run, round robin ---------------------------------------------- */
+    /* --- walk the stream once, rotating the owning process -------------- */
     cur = 0;
     in_quantum = 0;
-    alive = nproc;
 
-    while (alive > 0 && !oom) {
-        char line[64];
+    while (fgets(line, sizeof line, fp)) {
+        uint32_t   va  = (uint32_t)strtoul(line, NULL, 16);
+        AccessType acc = is_write() ? ACC_WRITE : ACC_READ;
 
-        if (done[cur]) {                        /* this trace is finished */
-            cur = (uint16_t)((cur + 1) % nproc);
-            in_quantum = 0;
-            continue;
-        }
-
-        if (!fgets(line, sizeof line, fp[cur])) {
-            done[cur] = 1;
-            alive--;
-            cur = (uint16_t)((cur + 1) % nproc);
-            in_quantum = 0;
-            continue;
-        }
-
-        {
-            uint32_t   va  = (uint32_t)strtoul(line, NULL, 16);
-            AccessType acc = is_write() ? ACC_WRITE : ACC_READ;
-
-            if (do_access(&procs[cur], va, acc) != 0) {
-                fprintf(stderr,
-                        "\nOUT OF MEMORY at access %llu: every frame is a page "
-                        "table or is protected by a process's lower limit.\n",
-                        (unsigned long long)n_access);
-                oom = 1;
-                break;
-            }
+        if (do_access(&procs[cur], va, acc) != 0) {
+            fprintf(stderr,
+                    "\nOUT OF MEMORY at access %llu: every frame is a page "
+                    "table or is protected by a process's lower limit.\n",
+                    (unsigned long long)n_access);
+            oom = 1;
+            break;
         }
 
         /* --- context switch ---------------------------------------------
@@ -346,9 +331,8 @@ int main(int argc, char **argv)
         mm_write(&mm, WB_TO_PA(e.block_addr));
     }
 
-    report(nproc, quantum);
+    report(nproc, quantum, trace);
 
-    for (uint16_t i = 0; i < nproc; i++)
-        fclose(fp[i]);
+    fclose(fp);
     return oom ? 1 : 0;
 }

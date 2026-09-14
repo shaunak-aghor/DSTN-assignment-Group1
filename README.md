@@ -17,21 +17,44 @@ unzip BenchmarkTraces-20260914.zip -d traces/
 # 2. build
 make
 
-# 3. run:  ./sim_q3 <num_processes> <accesses_per_context_switch>
-./sim_q3 3 500
+# 3. run:  ./sim_q3 <num_processes> <accesses_per_context_switch> <trace file>
+./sim_q3 5 10 traces/2026_27_ISEM_CC1.txt
 ```
 
 `make clean` removes `obj/` and the binary.
 
-### The two arguments
+### The three arguments
 
 | arg | meaning |
 |---|---|
-| `num_processes` | 1–5. Each process gets one benchmark trace, run round robin. |
-| `accesses_per_context_switch` | switch to the next process after this many accesses |
+| `num_processes` | 1–16 address spaces, each with its own page table |
+| `accesses_per_context_switch` | after this many accesses the running PID advances |
+| `trace file` | the address stream to run |
 
-Sanity check — `./sim_q3 3 500` should report roughly:
-368k accesses, TLB hit rate ~98%, L1 ~92%, L2 ~30%, 270 page faults.
+**One trace, time sliced.** The file is walked once from start to finish; every
+`<accesses_per_context_switch>` accesses the owning PID rotates, so each process
+sees a different slice of the same stream through its own address space. It is
+not one trace per process.
+
+Sanity check — `./sim_q3 5 10 traces/2026_27_ISEM_CC1.txt` should report
+223,342 accesses, 22,334 context switches, TLB ~90.6%, L1 ~75%, L2 ~62%.
+
+### What more processes actually cost
+
+Same trace, same total work, only the number of address spaces changes — so
+this isolates **interference**: five processes competing for one 32-entry TLB
+and one 4 KB L1.
+
+| procs | TLB hit% | TLB evictions | L1 hit% | L2 hit% | page faults |
+|---|---|---|---|---|---|
+| 1 | 98.45 | 0 | 95.15 | 10.39 | 153 |
+| 2 | 96.81 | 1,467 | 91.79 | 20.06 | 297 |
+| 5 | 90.59 | 13,967 | 74.98 | 62.49 | 711 |
+| 10 | 82.55 | 31,832 | 56.70 | 72.68 | 1,382 |
+
+L2's hit rate *rises* because it is exclusive: everything L1 loses lands there,
+so more L1 misses means more L2 hits. Page faults scale with the process count
+because each address space faults in its own copy of the working set.
 
 ---
 
