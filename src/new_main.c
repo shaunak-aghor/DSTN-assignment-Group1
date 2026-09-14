@@ -48,7 +48,7 @@
 #ifndef PROC_LOWER_LIMIT
 #define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC                */
 #endif
-#define MAX_PROCS          16      /* upper bound on the CLI argument        */
+#define MAX_PROCS          20     /* upper bound on the CLI argument        */
 
 /* ---- the machine ------------------------------------------------------- */
 static MM          mm;                  /* ~320 KB -- never a stack local */
