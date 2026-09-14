@@ -26,11 +26,26 @@ void wb_reset_stats(WriteBuffer *wb)
     wb->forwards        = 0;
 }
 
+/* Coalescing: a store whose block is already queued merges into that entry.
+ * There is nothing to write -- the entry already asserts "this block has
+ * pending writes" and the hierarchy carries no data -- so the merge is the
+ * absence of an append.  It costs no slot and cannot stall, which is what
+ * makes WB_ENTRIES a count of BLOCKS rather than of stores.
+ *
+ * The entry keeps its original queue position, so a later store to an older
+ * block drains before an earlier store to a newer one.  That reordering is
+ * inherent to write combining and is accepted here. */
 int wb_enqueue_store(WriteBuffer *wb, uint32_t pa)
 {
     WBEntry *e;
 
-    if (wb == NULL || wb_is_full(wb))
+    if (wb == NULL)
+        return 0;
+
+    if (wb_probe(wb, pa) >= 0)
+        return 1;               /* coalesced into the block already queued */
+
+    if (wb_is_full(wb))
         return 0;               /* caller drains the head and counts the stall */
 
     e = &wb->entries[wb->count];
@@ -72,8 +87,10 @@ int wb_flush_all(WriteBuffer *wb, void *ctx, void (*sink)(void *ctx, const WBEnt
     return drained;
 }
 
-/* Searches newest-first: a later store to the same block supersedes an
- * earlier one, so the highest index is the authoritative entry. */
+/* Block granularity: a hit says the block has pending writes, not that these
+ * particular bytes do.  Because enqueue coalesces, a block appears at most
+ * once, so there is exactly one entry to find and no newest-wins tie to
+ * resolve -- the scan direction is not load bearing. */
 int wb_probe(const WriteBuffer *wb, uint32_t pa)
 {
     uint32_t ba;
@@ -83,14 +100,28 @@ int wb_probe(const WriteBuffer *wb, uint32_t pa)
 
     ba = WB_BLOCK_ADDR(pa);
 
-    for (int i = (int)wb->count - 1; i >= 0; i--) {
+    for (int i = (int)wb->count - 1; i >= 0; i--)
         if (wb->entries[i].valid && wb->entries[i].block_addr == ba)
+            return i;               /* WB hit */
+
+    return -1;                      /* WB miss */
+}
+
+/* Oldest first: the caller drains from the head, so it wants the earliest
+ * entry that still names this frame. */
+int wb_probe_frame(const WriteBuffer *wb, uint32_t frame)
+{
+    int i;
+
+    if (wb == NULL)
+        return -1;
+
+    for (i = 0; i < (int)wb->count; i++)
+        if (wb->entries[i].valid &&
+            (uint32_t)PA_FRAME(WB_TO_PA(wb->entries[i].block_addr)) == frame)
             return i;
-        /* WB hit */
-    }
 
     return -1;
-    /* WB miss */
 }
 
 void wb_dump(const WriteBuffer *wb)

@@ -169,7 +169,7 @@ static void ref_inval_frame(RefTLB *r, uint32_t pfn)
  *  frames. That is a far stronger claim than "the same pages are resident".
  * ========================================================================*/
 
-static unsigned impl_order(const TLBImpl *t, Ref *out)
+static unsigned impl_order(const TLB *t, Ref *out)
 {
     unsigned n = 0;
     for (unsigned rank = 0; rank < TLB_ENTRIES; rank++)
@@ -183,7 +183,7 @@ static unsigned impl_order(const TLBImpl *t, Ref *out)
     return n;
 }
 
-static unsigned impl_valid(const TLBImpl *t)
+static unsigned impl_valid(const TLB *t)
 {
     unsigned n = 0;
     for (unsigned i = 0; i < TLB_ENTRIES; i++) n += t->entries[i].valid;
@@ -191,7 +191,7 @@ static unsigned impl_valid(const TLBImpl *t)
 }
 
 /* Returns 0 on agreement, or a description of the first divergence. */
-static const char *compare(const TLBImpl *t, const RefTLB *r)
+static const char *compare(const TLB *t, const RefTLB *r)
 {
     static char msg[256];
     Ref got[TLB_ENTRIES];
@@ -235,7 +235,7 @@ typedef struct {
 
 static int run_differential(const Mix *mix, unsigned long ops, uint32_t seed)
 {
-    TLBImpl t;
+    TLB t;
     RefTLB  r;
     unsigned long i;
     unsigned total = mix->w_lookup + mix->w_insert + mix->w_inval_e +
@@ -243,7 +243,7 @@ static int run_differential(const Mix *mix, unsigned long ops, uint32_t seed)
     unsigned long n_lookup = 0, n_insert = 0, n_inval = 0, n_hit = 0;
 
     rng_state = seed;
-    tlb_impl_init(&t);
+    tlb_init(&t);
     ref_init(&r);
 
     for (i = 0; i < ops; i++) {
@@ -256,7 +256,7 @@ static int run_differential(const Mix *mix, unsigned long ops, uint32_t seed)
 
         if (pick < mix->w_lookup) {
             uint32_t a = 0xAAAA, b = 0xBBBB;
-            int ha = tlb_impl_lookup(&t, pid, vpn, &a);
+            int ha = tlb_lookup(&t, pid, vpn, &a);
             int hb = ref_lookup(&r, pid, vpn, &b);
             what = "lookup";
             n_lookup++; n_hit += (unsigned)hb;
@@ -273,20 +273,20 @@ static int run_differential(const Mix *mix, unsigned long ops, uint32_t seed)
                 return 0;
             }
         } else if (pick < mix->w_lookup + mix->w_insert) {
-            tlb_impl_insert(&t, pid, vpn, pfn);
+            tlb_insert(&t, pid, vpn, pfn);
             ref_insert(&r, pid, vpn, pfn);
             what = "insert"; n_insert++;
         } else if (pick < mix->w_lookup + mix->w_insert + mix->w_inval_e) {
-            tlb_impl_invalidate_entry(&t, pid, vpn);
+            tlb_invalidate_entry(&t, pid, vpn);
             ref_inval_entry(&r, pid, vpn);
             what = "invalidate_entry"; n_inval++;
         } else if (pick < mix->w_lookup + mix->w_insert + mix->w_inval_e +
                           mix->w_inval_pid) {
-            tlb_impl_invalidate_pid(&t, pid);
+            tlb_invalidate_pid(&t, pid);
             ref_inval_pid(&r, pid);
             what = "invalidate_pid"; n_inval++;
         } else {
-            tlb_impl_invalidate_frame(&t, pfn);
+            tlb_invalidate_frame(&t, pfn);
             ref_inval_frame(&r, pfn);
             what = "invalidate_frame"; n_inval++;
         }
@@ -315,7 +315,7 @@ int main(int argc, char **argv)
 {
     report_begin(argc, argv, "results/test_tlb_full.txt");
 
-    TLBImpl t;
+    TLB t;
     uint32_t pfn;
 
     printf("=========================================================================\n");
@@ -325,44 +325,44 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("Boundary: the first and last page of an address space");
-    tlb_impl_init(&t);
-    tlb_impl_insert(&t, 1, 0, 0x111);
-    tlb_impl_insert(&t, 1, PAGES_PER_PROC - 1, 0x222);
-    REQUIRE(tlb_impl_lookup(&t, 1, 0, &pfn) && pfn == 0x111,
+    tlb_init(&t);
+    tlb_insert(&t, 1, 0, 0x111);
+    tlb_insert(&t, 1, PAGES_PER_PROC - 1, 0x222);
+    REQUIRE(tlb_lookup(&t, 1, 0, &pfn) && pfn == 0x111,
             "vpn 0 (first page) maps to frame 0x%X", pfn);
-    REQUIRE(tlb_impl_lookup(&t, 1, PAGES_PER_PROC - 1, &pfn) && pfn == 0x222,
+    REQUIRE(tlb_lookup(&t, 1, PAGES_PER_PROC - 1, &pfn) && pfn == 0x222,
             "vpn %u (last page) maps to frame 0x%X", PAGES_PER_PROC - 1, pfn);
-    REQUIRE(tlb_impl_probe(&t, 1, 0) != tlb_impl_probe(&t, 1, 255),
+    REQUIRE(tlb_probe(&t, 1, 0) != tlb_probe(&t, 1, 255),
             "they occupy different entries -- vpn 0 is not confused with 255");
     scenario_end();
 
     /* ------------------------------------------------------------------ */
     scenario("Boundary: lowest and highest PID the 14-bit field can hold");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         uint32_t maxpid = (uint32_t)MASK(PID_BITS);          /* 16383 */
-        tlb_impl_insert(&t, 1,      0x40, 0x300);
-        tlb_impl_insert(&t, maxpid, 0x40, 0x400);
-        REQUIRE(tlb_impl_lookup(&t, 1, 0x40, &pfn) && pfn == 0x300,
+        tlb_insert(&t, 1,      0x40, 0x300);
+        tlb_insert(&t, maxpid, 0x40, 0x400);
+        REQUIRE(tlb_lookup(&t, 1, 0x40, &pfn) && pfn == 0x300,
                 "pid 1 -> frame 0x%X", pfn);
-        REQUIRE(tlb_impl_lookup(&t, maxpid, 0x40, &pfn) && pfn == 0x400,
+        REQUIRE(tlb_lookup(&t, maxpid, 0x40, &pfn) && pfn == 0x400,
                 "pid %u (2^%u - 1) -> frame 0x%X", maxpid, PID_BITS, pfn);
-        REQUIRE(tlb_impl_probe(&t, 1, 0x40) >= 0 &&
-                tlb_impl_probe(&t, maxpid, 0x40) >= 0,
+        REQUIRE(tlb_probe(&t, 1, 0x40) >= 0 &&
+                tlb_probe(&t, maxpid, 0x40) >= 0,
                 "both survive: the PID field holds its full range");
     }
     scenario_end();
 
     /* ------------------------------------------------------------------ */
     scenario("Boundary: frame 0 and the last frame in 32 MB");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         uint32_t maxfrm = NUM_FRAMES - 1;                    /* 32767 */
-        tlb_impl_insert(&t, 2, 0x01, 0);
-        tlb_impl_insert(&t, 2, 0x02, maxfrm);
-        REQUIRE(tlb_impl_lookup(&t, 2, 0x01, &pfn) && pfn == 0,
+        tlb_insert(&t, 2, 0x01, 0);
+        tlb_insert(&t, 2, 0x02, maxfrm);
+        REQUIRE(tlb_lookup(&t, 2, 0x01, &pfn) && pfn == 0,
                 "frame 0 survives the round trip (a zero pfn is legal)");
-        REQUIRE(tlb_impl_lookup(&t, 2, 0x02, &pfn) && pfn == maxfrm,
+        REQUIRE(tlb_lookup(&t, 2, 0x02, &pfn) && pfn == maxfrm,
                 "frame %u survives -- the %u-bit field is not one bit short",
                 pfn, FRAME_BITS);
     }
@@ -370,22 +370,22 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("Field truncation is CONSISTENT between insert and probe");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         /* The bit fields are narrower than the uint32_t parameters. What
          * matters is not that oversized values are rejected -- they are
          * masked -- but that insert and probe mask IDENTICALLY, so a caller
          * can never store under one key and fail to find it under the same
          * key. An asymmetric mask would be a silent lookup failure. */
-        tlb_impl_insert(&t, 1, 300, 0x555);          /* vpn 300 -> 44 */
-        REQUIRE(tlb_impl_probe(&t, 1, 300) >= 0,
+        tlb_insert(&t, 1, 300, 0x555);          /* vpn 300 -> 44 */
+        REQUIRE(tlb_probe(&t, 1, 300) >= 0,
                 "vpn 300 is found again under vpn 300");
-        REQUIRE(tlb_impl_probe(&t, 1, 300) == tlb_impl_probe(&t, 1, 300 & 0xFF),
+        REQUIRE(tlb_probe(&t, 1, 300) == tlb_probe(&t, 1, 300 & 0xFF),
                 "and under its masked form %u -- same entry, no split", 300 & 0xFF);
 
-        tlb_impl_init(&t);
-        tlb_impl_insert(&t, 1, 0x10, NUM_FRAMES + 5);   /* pfn wraps to 5 */
-        tlb_impl_lookup(&t, 1, 0x10, &pfn);
+        tlb_init(&t);
+        tlb_insert(&t, 1, 0x10, NUM_FRAMES + 5);   /* pfn wraps to 5 */
+        tlb_lookup(&t, 1, 0x10, &pfn);
         REQUIRE(pfn == 5, "pfn %u + %u masks to %u -- and stays masked on read",
                 NUM_FRAMES, 5, pfn);
         REQUIRE(pfn < NUM_FRAMES,
@@ -395,20 +395,20 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("PID recycling: a new process must not inherit a dead one's TLB");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         int inherited;
         /* pid 5 runs and caches four translations */
-        for (uint32_t v = 0; v < 4; v++) tlb_impl_insert(&t, 5, v, 0x600 + v);
-        REQUIRE(tlb_impl_probe(&t, 5, 2) >= 0, "pid 5 has its mappings cached");
+        for (uint32_t v = 0; v < 4; v++) tlb_insert(&t, 5, v, 0x600 + v);
+        REQUIRE(tlb_probe(&t, 5, 2) >= 0, "pid 5 has its mappings cached");
 
         /* pid 5 terminates -- the specification's invalidation event */
-        tlb_impl_invalidate_pid(&t, 5);
+        tlb_invalidate_pid(&t, 5);
 
         /* the PID is recycled: a brand-new, unrelated process gets pid 5 */
         inherited = 0;
         for (uint32_t v = 0; v < 4; v++)
-            if (tlb_impl_lookup(&t, 5, v, &pfn)) inherited = 1;
+            if (tlb_lookup(&t, 5, v, &pfn)) inherited = 1;
 
         REQUIRE(!inherited,
                 "the new pid 5 inherits NOTHING -- all 4 lookups miss");
@@ -419,21 +419,21 @@ int main(int argc, char **argv)
                PID_BITS, (unsigned long)MASK(PID_BITS) + 1);
 
         /* and it can build its own mappings on the same VPNs */
-        tlb_impl_insert(&t, 5, 2, 0x999);
-        REQUIRE(tlb_impl_lookup(&t, 5, 2, &pfn) && pfn == 0x999,
+        tlb_insert(&t, 5, 2, 0x999);
+        REQUIRE(tlb_lookup(&t, 5, 2, &pfn) && pfn == 0x999,
                 "and establishes its own mapping for vpn 2 -> 0x%X", pfn);
     }
     scenario_end();
 
     /* ------------------------------------------------------------------ */
     scenario("Negative control: the same sequence WITHOUT the invalidation");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         int inherited = 0;
-        for (uint32_t v = 0; v < 4; v++) tlb_impl_insert(&t, 5, v, 0x600 + v);
-        /* pid 5 "exits" but nobody calls tlb_impl_invalidate_pid */
+        for (uint32_t v = 0; v < 4; v++) tlb_insert(&t, 5, v, 0x600 + v);
+        /* pid 5 "exits" but nobody calls tlb_invalidate_pid */
         for (uint32_t v = 0; v < 4; v++)
-            if (tlb_impl_lookup(&t, 5, v, &pfn)) inherited = 1;
+            if (tlb_lookup(&t, 5, v, &pfn)) inherited = 1;
         REQUIRE(inherited,
                 "the stale entries ARE still reachable -- confirming the "
                 "previous scenario tested something real, not a tautology");
@@ -442,11 +442,11 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("Churn on a single mapping never grows or evicts");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         for (int i = 0; i < 1000; i++) {
-            tlb_impl_insert(&t, 3, 0x77, 0x800 + (uint32_t)(i & 7));
-            tlb_impl_lookup(&t, 3, 0x77, &pfn);
+            tlb_insert(&t, 3, 0x77, 0x800 + (uint32_t)(i & 7));
+            tlb_lookup(&t, 3, 0x77, &pfn);
         }
         REQUIRE(impl_valid(&t) == 1, "exactly 1 valid entry after 1000 inserts");
         REQUIRE(t.evictions == 0, "0 evictions (%llu)",
@@ -457,17 +457,17 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("Scattered invalidation then refill reuses holes, never evicts");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         for (uint32_t v = 0; v < TLB_ENTRIES; v++)
-            tlb_impl_insert(&t, 4, v, 0x900 + v);
+            tlb_insert(&t, 4, v, 0x900 + v);
         for (uint32_t v = 1; v < TLB_ENTRIES; v += 3)      /* punch holes */
-            tlb_impl_invalidate_entry(&t, 4, v);
+            tlb_invalidate_entry(&t, 4, v);
         {
             unsigned holes = TLB_ENTRIES - impl_valid(&t);
-            tlb_impl_reset_stats(&t);
+            tlb_reset_stats(&t);
             for (unsigned k = 0; k < holes; k++)
-                tlb_impl_insert(&t, 6, 0xF0 + k, 0xA00 + k);
+                tlb_insert(&t, 6, 0xF0 + k, 0xA00 + k);
             REQUIRE(t.evictions == 0,
                     "%u holes refilled with 0 evictions (%llu)", holes,
                     (unsigned long long)t.evictions);
@@ -479,13 +479,13 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------------ */
     scenario("Statistics stay self-consistent under a mixed workload");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     {
         uint64_t lookups = 0;
         for (int i = 0; i < 5000; i++) {
             uint32_t pid = 1 + rnd_below(4), vpn = rnd_below(40);
-            if (rnd_below(3) == 0) tlb_impl_insert(&t, pid, vpn, 0xB00 + vpn);
-            else { tlb_impl_lookup(&t, pid, vpn, &pfn); lookups++; }
+            if (rnd_below(3) == 0) tlb_insert(&t, pid, vpn, 0xB00 + vpn);
+            else { tlb_lookup(&t, pid, vpn, &pfn); lookups++; }
         }
         REQUIRE(t.hits + t.misses == lookups,
                 "hits (%llu) + misses (%llu) == lookups (%llu)",

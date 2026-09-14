@@ -188,3 +188,28 @@ void l2_allocate(L2Cache *l2, uint32_t pa)
     l2_age(l2, index, way);
 }
 
+
+/* L2's tag and index do not line up with the page offset the way L1's do, so
+ * each line's frame is reconstructed from (tag, index) and compared.  No FIFO
+ * repair is needed: l2_select_victim skips invalid ways, and l2_age rewrites
+ * the row and column when the way is refilled. */
+int l2_invalidate_frame(L2Cache *l2, uint32_t frame)
+{
+    int dropped = 0;
+
+    if (l2 == NULL)
+        return 0;
+
+    for (uint32_t s = 0; s < L2_SETS; s++)
+        for (int w = 0; w < L2_WAYS; w++) {
+            L2Line *line = &l2->sets[s].ways[w];
+
+            if (line->valid &&
+                (uint32_t)PA_FRAME(L2_MAKE_PA(line->tag, s)) == frame) {
+                line->valid = 0;
+                dropped++;
+            }
+        }
+
+    return dropped;
+}

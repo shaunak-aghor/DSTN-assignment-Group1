@@ -115,13 +115,13 @@ apply "M3  touch() does not age the other entries" \
 # --- 4. process termination leaves stale entries behind ---------------------
 apply "M4  invalidate_pid matches nothing (dead PIDs keep their mappings)" \
 "t->entries[i].pid == (pid & (uint32_t)MASK(PID_BITS)))
-            tlb_impl_forget(t, i);" \
+            tlb_forget(t, i);" \
 "t->entries[i].pid == 0xFFFFFFFFu)
-            tlb_impl_forget(t, i);"
+            tlb_forget(t, i);"
 
 # --- 5. a remapped page gets two entries ------------------------------------
 apply "M5  insert skips the duplicate check (stale entry can shadow the new one)" \
-"int i = tlb_impl_probe(t, pid, vpn);
+"int i = tlb_probe(t, pid, vpn);
 
     /* Already cached" \
 "int i = -1;
@@ -138,9 +138,9 @@ apply "M6  forget() skips the rank repair (ranks stay ordered but not a permutat
 # --- 7. a reused frame keeps its stale translation --------------------------
 apply "M7  invalidate_frame matches nothing (reused frame serves the old page)" \
 "t->entries[i].pfn == (pfn & (uint32_t)MASK(FRAME_BITS)))
-            tlb_impl_forget(t, i);" \
+            tlb_forget(t, i);" \
 "t->entries[i].pfn == 0xFFFFFFFFu)
-            tlb_impl_forget(t, i);"
+            tlb_forget(t, i);"
 
 echo
 echo "================================================================"

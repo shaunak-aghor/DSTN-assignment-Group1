@@ -170,8 +170,8 @@ int main(int argc, char **argv)
     tc_input("inspect the TLB immediately after mm_prepage(pid 1)");
     tc_setup("pages 0 and 1 are resident in main memory");
     field_i("valid TLB entries",   0, (long)tlb_valid());
-    field_i("probe(pid 1, vpn 0)", -1, tlb_impl_probe(&mmu.tlb, 1, 0));
-    field_i("probe(pid 1, vpn 1)", -1, tlb_impl_probe(&mmu.tlb, 1, 1));
+    field_i("probe(pid 1, vpn 0)", -1, tlb_probe(&mmu.tlb, 1, 0));
+    field_i("probe(pid 1, vpn 1)", -1, tlb_probe(&mmu.tlb, 1, 1));
     field_i("16 B block fetches",   0, (long)mm.block_fetches);
     tc_end("The specification says pre-paged \"into main memory [not to\n"
            "              cache]\". The TLB caches TRANSLATIONS, and a translation\n"
@@ -262,7 +262,7 @@ int main(int argc, char **argv)
     snap();
     st = mmu_translate(&mmu, 1, VA(50, 0x10), ACC_WRITE, &pa);
     field_s("status", "FAULT: protection violation", mmu_status_name(st));
-    field_i("probe(pid 1, vpn 50)", -1, tlb_impl_probe(&mmu.tlb, 1, 50));
+    field_i("probe(pid 1, vpn 50)", -1, tlb_probe(&mmu.tlb, 1, 50));
     field_i("page faults",           0, d_faults());
     field_i("disk reads",            0, d_disk());
     field_i("PTE[50].present",       0, procs[0].pt->entries[50].present);
@@ -356,7 +356,7 @@ int main(int argc, char **argv)
         doomed_frame = procs[0].pt->entries[doomed].frame;
 
         field_i("page 4 is in the TLB before", 1,
-                tlb_impl_probe(&mmu.tlb, 1, doomed) >= 0);
+                tlb_probe(&mmu.tlb, 1, doomed) >= 0);
 
         while ((f = mm_alloc_frame(&mm, 0x3FFF, 0, 0)) >= 0)
             mm.frames[f].aging = 0xFF;               /* fill, make them hot */
@@ -369,14 +369,14 @@ int main(int argc, char **argv)
 
         field_s("status", "OK (page fault serviced)", mmu_status_name(st));
         field_i("PTE[4].present after",         0, procs[0].pt->entries[4].present);
-        field_i("probe(pid 1, vpn 4) after",   -1, tlb_impl_probe(&mmu.tlb, 1, 4));
+        field_i("probe(pid 1, vpn 4) after",   -1, tlb_probe(&mmu.tlb, 1, 4));
         field_i("page 60's new frame", (long)doomed_frame, (long)PA_FRAME(pa));
     }
     tc_end("This is the page-fault case that actually endangers the TLB.\n"
            "              Frame reuse makes a cached translation a lie: a hit on\n"
            "              page 4 would return a frame that now holds page 60. The\n"
            "              fault handler notifies the MMU, which calls\n"
-           "              tlb_impl_invalidate_frame() BEFORE the frame is refilled.\n"
+           "              tlb_invalidate_frame() BEFORE the frame is refilled.\n"
            "              Note it is invalidated by FRAME, not by page, because a\n"
            "              frame can be mapped from several page tables.");
 
@@ -431,7 +431,7 @@ int main(int argc, char **argv)
          * illegal write was allowed. Force the check through the page table
          * to test the permission bits themselves. TC-23 covers the hit case
          * as the documented limitation it is. */
-        tlb_impl_invalidate_entry(&mmu.tlb, 1, 31);
+        tlb_invalidate_entry(&mmu.tlb, 1, 31);
         s4 = mmu_translate(&mmu, 1, VA(31, 8), ACC_WRITE, &pa);
 
         field_s("X on rw- page (absent)", "FAULT: protection violation",
@@ -441,7 +441,7 @@ int main(int argc, char **argv)
         field_s("W on r-x page, TLB cached", "OK (TLB hit)", mmu_status_name(s3));
         field_s("W on r-x page, after invalidate", "FAULT: protection violation",
                 mmu_status_name(s4));
-        field_i("probe(pid 1, vpn 30)", -1, tlb_impl_probe(&mmu.tlb, 1, 30));
+        field_i("probe(pid 1, vpn 30)", -1, tlb_probe(&mmu.tlb, 1, 30));
     }
     tc_end("Three access types, three independent permission bits: page 30\n"
            "              is rw- so a fetch is refused, page 31 is r-x so a fetch\n"
@@ -504,8 +504,8 @@ int main(int argc, char **argv)
         field_i("valid TLB entries after", (long)TLB_ENTRIES, (long)tlb_valid());
         field_i("TLB evictions", 1, (long)mmu.tlb.evictions);
         field_i("page 0 survived (was touched)", 1,
-                tlb_impl_probe(&mmu.tlb, 1, 0) >= 0);
-        field_i("page 1 evicted (was LRU)", -1, tlb_impl_probe(&mmu.tlb, 1, 1));
+                tlb_probe(&mmu.tlb, 1, 0) >= 0);
+        field_i("page 1 evicted (was LRU)", -1, tlb_probe(&mmu.tlb, 1, 1));
     }
     tc_end("Two independent resources can be full at once. Here memory has\n"
            "              32000+ free frames, so the fault is cheap, but the TLB is\n"
@@ -529,7 +529,7 @@ int main(int argc, char **argv)
         /* Any page the cap pushed out must be gone from the TLB too. */
         for (uint32_t v = 0; v < 6; v++)
             if (!procs[0].pt->entries[v].present &&
-                tlb_impl_probe(&mmu.tlb, 1, v) >= 0)
+                tlb_probe(&mmu.tlb, 1, v) >= 0)
                 evicted_still_cached++;
 
         field_i("resident frames", 4, (long)procs[0].frames_held);
@@ -568,7 +568,7 @@ int main(int argc, char **argv)
         field_s("status", "FAULT: no evictable frame", mmu_status_name(st));
         field_i("pa_out untouched", (long)0x11111111, (long)pa);
         field_i("disk reads", 0, d_disk());
-        field_i("probe(pid 1, vpn 40)", -1, tlb_impl_probe(&mmu.tlb, 1, 40));
+        field_i("probe(pid 1, vpn 40)", -1, tlb_probe(&mmu.tlb, 1, 40));
     }
     tc_end("The out-of-memory leaf of the flowchart, and the one path I had\n"
            "              previously left untested. Every allocated frame is a page\n"
@@ -639,7 +639,7 @@ int main(int argc, char **argv)
         dirty_frame = procs[0].pt->entries[3].frame;
 
         field_i("PTE[3].dirty", 1, procs[0].pt->entries[3].dirty);
-        field_i("page 3 cached in TLB", 1, tlb_impl_probe(&mmu.tlb, 1, 3) >= 0);
+        field_i("page 3 cached in TLB", 1, tlb_probe(&mmu.tlb, 1, 3) >= 0);
 
         while ((f = mm_alloc_frame(&mm, 0x3FFF, 0, 0)) >= 0)
             mm.frames[f].aging = 0xFF;
@@ -653,7 +653,7 @@ int main(int argc, char **argv)
 
         field_i("disk write-backs", 1, (long)(mm.disk_writebacks - wb0));
         field_i("PTE[3].present after", 0, procs[0].pt->entries[3].present);
-        field_i("probe(pid 1, vpn 3) after", -1, tlb_impl_probe(&mmu.tlb, 1, 3));
+        field_i("probe(pid 1, vpn 3) after", -1, tlb_probe(&mmu.tlb, 1, 3));
         field_i("page 80 took frame", (long)dirty_frame, (long)PA_FRAME(pa));
     }
     tc_end("Both consequences of one eviction. The page differs from disk,\n"
@@ -692,7 +692,7 @@ int main(int argc, char **argv)
         field_i("pid 2 TLB entries after", 0, (long)pid2_entries);
         field_i("frames returned (6 pages + 1 page table)", 7,
                 (long)(mm.free_frames - free_before));
-        field_i("pid 1 still cached", 1, tlb_impl_probe(&mmu.tlb, 1, 0) >= 0);
+        field_i("pid 1 still cached", 1, tlb_probe(&mmu.tlb, 1, 0) >= 0);
         field_i("pid 1 frames untouched", 4, (long)procs[0].frames_held);
     }
     tc_end("The bulk invalidation the specification names explicitly. The\n"
@@ -718,18 +718,18 @@ int main(int argc, char **argv)
         field_i("PTE says writable", 0,
                 (procs[0].pt->entries[20].prot & PROT_WRITE) != 0);
 
-        tlb_impl_invalidate_entry(&mmu.tlb, 1, 20);         /* the fix       */
+        tlb_invalidate_entry(&mmu.tlb, 1, 20);         /* the fix       */
         s_after = mmu_translate(&mmu, 1, VA(20, 8), ACC_WRITE, &pa);
         field_s("after invalidating the entry", "FAULT: protection violation",
                 mmu_status_name(s_after));
     }
     tc_end("This test asserts the BUG, deliberately, so it is documented and\n"
-           "              cannot regress silently. TLBImplEntry carries no prot bits,\n"
+           "              cannot regress silently. TLBEntry carries no prot bits,\n"
            "              and re-reading the PTE on every hit would cost a memory\n"
            "              access per reference and defeat the TLB entirely. So the\n"
            "              write is permitted until the entry is invalidated -- which\n"
            "              the driver's PROT directive does for exactly this reason.\n"
-           "              Real fix: add 'prot : 3' to TLBImplEntry, which needs\n"
+           "              Real fix: add 'prot : 3' to TLBEntry, which needs\n"
            "              TLB.h -- a file this work does not modify.");
 
     /* -------------------------------------------------------------- */

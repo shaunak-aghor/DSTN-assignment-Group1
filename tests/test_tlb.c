@@ -39,7 +39,7 @@ static int checks = 0, failures = 0;
 static const char *section = "";
 
 /* NOTE: `cond` is evaluated exactly ONCE. Several checks call
- * tlb_impl_lookup() directly in the condition, and a second evaluation
+ * tlb_lookup() directly in the condition, and a second evaluation
  * would corrupt the very hit/miss counters the next check inspects. */
 #define CHECK(cond, ...)                                                      \
     do {                                                                      \
@@ -79,7 +79,7 @@ STATIC_ASSERT(PAGE_SIZE == (1 << PAGE_OFFSET_BITS),        page_size);
  * Valid entries must hold ranks 0,1,...,valid_count-1 exactly once each.
  * If this ever breaks, replacement silently stops being LRU.
  * ---------------------------------------------------------------------- */
-static int lru_ok(const TLBImpl *t, const char **why)
+static int lru_ok(const TLB *t, const char **why)
 {
     int seen[TLB_ENTRIES];
     unsigned i, live = 0;
@@ -100,13 +100,13 @@ static int lru_ok(const TLBImpl *t, const char **why)
     return 1;
 }
 
-static void check_lru(const TLBImpl *t, const char *when)
+static void check_lru(const TLB *t, const char *when)
 {
     const char *why;
     CHECK(lru_ok(t, &why), "LRU ranks form a permutation %-28s (%s)", when, why);
 }
 
-static unsigned live_entries(const TLBImpl *t)
+static unsigned live_entries(const TLB *t)
 {
     unsigned i, n = 0;
     for (i = 0; i < TLB_ENTRIES; i++) n += t->entries[i].valid;
@@ -127,16 +127,16 @@ static uint32_t page_table_walk(uint32_t pid, uint32_t vpn)
 }
 
 /* One complete access: VA in, PA out. Returns 1 if the TLB hit. */
-static int translate(TLBImpl *t, uint32_t pid, uint32_t va, uint32_t *pa_out)
+static int translate(TLB *t, uint32_t pid, uint32_t va, uint32_t *pa_out)
 {
     uint32_t vpn = (unsigned)VA_VPN(va);
     uint32_t off = (unsigned)VA_OFFSET(va);
     uint32_t pfn;
-    int hit = tlb_impl_lookup(t, pid, vpn, &pfn);
+    int hit = tlb_lookup(t, pid, vpn, &pfn);
 
     if (!hit) {
         pfn = page_table_walk(pid, vpn);
-        tlb_impl_insert(t, pid, vpn, pfn);
+        tlb_insert(t, pid, vpn, pfn);
     }
     if (pa_out) *pa_out = (pfn << PAGE_OFFSET_BITS) | off;
     return hit;
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
 {
     report_begin(argc, argv, "results/test_tlb.txt");
 
-    TLBImpl t;
+    TLB t;
     uint32_t pa, pfn;
     unsigned i;
 
@@ -186,17 +186,17 @@ int main(int argc, char **argv)
 
     /* ---------------------------------------------------------------- 3 */
     head("3.", "Cold TLB -- every lookup is a compulsory miss");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     check_lru(&t, "after init");
     CHECK(live_entries(&t) == 0, "0 valid entries after init");
     for (i = 0; i < 5; i++)
-        CHECK(tlb_impl_lookup(&t, 1, i, &pfn) == 0, "lookup(pid 1, vpn %u) misses", i);
+        CHECK(tlb_lookup(&t, 1, i, &pfn) == 0, "lookup(pid 1, vpn %u) misses", i);
     CHECK(t.misses == 5 && t.hits == 0, "misses=%llu hits=%llu",
           (unsigned long long)t.misses, (unsigned long long)t.hits);
 
     /* ---------------------------------------------------------------- 4 */
     head("4.", "Fill and hit -- the full VA -> PA flow");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     walks = 0;
     {
         uint32_t va = 0x2A234;
@@ -225,47 +225,47 @@ int main(int argc, char **argv)
 
     /* ---------------------------------------------------------------- 5 */
     head("5.", "Re-inserting the same (pid, vpn) must not duplicate");
-    tlb_impl_init(&t);
-    tlb_impl_insert(&t, 3, 0x20, 0x111);
-    tlb_impl_insert(&t, 3, 0x20, 0x222);        /* remap, e.g. after a fault */
+    tlb_init(&t);
+    tlb_insert(&t, 3, 0x20, 0x111);
+    tlb_insert(&t, 3, 0x20, 0x222);        /* remap, e.g. after a fault */
     CHECK(live_entries(&t) == 1, "still exactly 1 valid entry");
-    tlb_impl_lookup(&t, 3, 0x20, &pfn);
+    tlb_lookup(&t, 3, 0x20, &pfn);
     CHECK(pfn == 0x222, "the mapping was refreshed, not shadowed (pfn 0x%X)", pfn);
     check_lru(&t, "after duplicate insert");
 
     /* ---------------------------------------------------------------- 6 */
     head("6.", "LRU -- the 33rd fill evicts the true LRU entry");
-    tlb_impl_init(&t);
+    tlb_init(&t);
     for (i = 0; i < TLB_ENTRIES; i++) {
-        tlb_impl_insert(&t, 1, 0x10 + i, 0x400 + i);
+        tlb_insert(&t, 1, 0x10 + i, 0x400 + i);
         check_lru(&t, "during fill");
     }
     CHECK(live_entries(&t) == TLB_ENTRIES, "TLB is full (%u entries)", TLB_ENTRIES);
     CHECK(t.evictions == 0, "no evictions while filling empty slots");
 
     /* vpn 0x10 is the oldest; touch it so vpn 0x11 becomes the victim. */
-    tlb_impl_lookup(&t, 1, 0x10, &pfn);
+    tlb_lookup(&t, 1, 0x10, &pfn);
     check_lru(&t, "after touching the oldest entry");
 
-    tlb_impl_insert(&t, 1, 0x70, 0x500);
+    tlb_insert(&t, 1, 0x70, 0x500);
     check_lru(&t, "after the 33rd insert");
     CHECK(t.evictions == 1, "exactly 1 capacity eviction recorded");
-    CHECK(tlb_impl_probe(&t, 1, 0x10) >= 0, "vpn 0x10 survived -- it was touched");
-    CHECK(tlb_impl_probe(&t, 1, 0x11) <  0, "vpn 0x11 was evicted -- it was the LRU");
-    CHECK(tlb_impl_probe(&t, 1, 0x70) >= 0, "vpn 0x70 is now resident");
+    CHECK(tlb_probe(&t, 1, 0x10) >= 0, "vpn 0x10 survived -- it was touched");
+    CHECK(tlb_probe(&t, 1, 0x11) <  0, "vpn 0x11 was evicted -- it was the LRU");
+    CHECK(tlb_probe(&t, 1, 0x70) >= 0, "vpn 0x70 is now resident");
     CHECK(live_entries(&t) == TLB_ENTRIES, "still exactly %u valid entries", TLB_ENTRIES);
 
     /* ---------------------------------------------------------------- 7 */
     head("7.", "PID tagging -- same VPN, different processes");
-    tlb_impl_init(&t);
-    tlb_impl_insert(&t, 7, 0xA8, 0x1A3);
-    tlb_impl_insert(&t, 9, 0xA8, 0x2C0);
+    tlb_init(&t);
+    tlb_insert(&t, 7, 0xA8, 0x1A3);
+    tlb_insert(&t, 9, 0xA8, 0x2C0);
     CHECK(live_entries(&t) == 2, "both mappings coexist for the same VPN 0xA8");
-    CHECK(tlb_impl_lookup(&t, 7, 0xA8, &pfn) && pfn == 0x1A3,
+    CHECK(tlb_lookup(&t, 7, 0xA8, &pfn) && pfn == 0x1A3,
           "pid 7 -> frame 0x%03X", pfn);
-    CHECK(tlb_impl_lookup(&t, 9, 0xA8, &pfn) && pfn == 0x2C0,
+    CHECK(tlb_lookup(&t, 9, 0xA8, &pfn) && pfn == 0x2C0,
           "pid 9 -> frame 0x%03X", pfn);
-    CHECK(tlb_impl_lookup(&t, 5, 0xA8, &pfn) == 0,
+    CHECK(tlb_lookup(&t, 5, 0xA8, &pfn) == 0,
           "pid 5 misses -- the PID is part of the match, not just the VPN");
     check_lru(&t, "after two-process fill");
 
@@ -278,7 +278,7 @@ int main(int argc, char **argv)
            there is no API call to make, and nothing may be lost. */
         CHECK(live_entries(&t) == before,
               "switching pid 7 -> 9 -> 7 leaves all %u entries valid", before);
-        CHECK(tlb_impl_lookup(&t, 7, 0xA8, &pfn) == 1,
+        CHECK(tlb_lookup(&t, 7, 0xA8, &pfn) == 1,
               "pid 7's mapping still hits after the switch");
         CHECK(t.hits == h + 1, "and it counted as a hit, not a refill");
         printf("    (an untagged TLB would need %u invalidations here)\n", before);
@@ -286,53 +286,53 @@ int main(int argc, char **argv)
 
     /* ---------------------------------------------------------------- 9 */
     head("9.", "invalidate_entry -- one page was evicted from memory");
-    tlb_impl_init(&t);
-    for (i = 0; i < 4; i++) tlb_impl_insert(&t, 1, i, 0x300 + i);
-    tlb_impl_invalidate_entry(&t, 1, 2);
+    tlb_init(&t);
+    for (i = 0; i < 4; i++) tlb_insert(&t, 1, i, 0x300 + i);
+    tlb_invalidate_entry(&t, 1, 2);
     check_lru(&t, "after invalidate_entry");
     CHECK(live_entries(&t) == 3, "3 of 4 entries remain");
-    CHECK(tlb_impl_probe(&t, 1, 2) < 0, "vpn 2 is gone");
-    CHECK(tlb_impl_probe(&t, 1, 1) >= 0 && tlb_impl_probe(&t, 1, 3) >= 0,
+    CHECK(tlb_probe(&t, 1, 2) < 0, "vpn 2 is gone");
+    CHECK(tlb_probe(&t, 1, 1) >= 0 && tlb_probe(&t, 1, 3) >= 0,
           "its neighbours are untouched");
-    tlb_impl_invalidate_entry(&t, 1, 99);
+    tlb_invalidate_entry(&t, 1, 99);
     CHECK(live_entries(&t) == 3, "invalidating an absent page is a no-op");
 
     /* --------------------------------------------------------------- 10 */
     head("10.", "invalidate_pid -- a process terminated");
-    tlb_impl_init(&t);
-    for (i = 0; i < 6; i++) tlb_impl_insert(&t, 1, i, 0x300 + i);
-    for (i = 0; i < 5; i++) tlb_impl_insert(&t, 2, i, 0x700 + i);
+    tlb_init(&t);
+    for (i = 0; i < 6; i++) tlb_insert(&t, 1, i, 0x300 + i);
+    for (i = 0; i < 5; i++) tlb_insert(&t, 2, i, 0x700 + i);
     CHECK(live_entries(&t) == 11, "11 entries across 2 processes");
-    tlb_impl_invalidate_pid(&t, 2);
+    tlb_invalidate_pid(&t, 2);
     check_lru(&t, "after invalidate_pid");
     CHECK(live_entries(&t) == 6, "process 2's 5 entries were removed");
     for (i = 0; i < 5; i++)
-        if (tlb_impl_probe(&t, 2, i) >= 0) { CHECK(0, "pid 2 vpn %u lingers", i); break; }
-    CHECK(tlb_impl_probe(&t, 2, 0) < 0, "no pid-2 entry survives");
-    CHECK(tlb_impl_probe(&t, 1, 0) >= 0, "process 1 is completely unaffected");
+        if (tlb_probe(&t, 2, i) >= 0) { CHECK(0, "pid 2 vpn %u lingers", i); break; }
+    CHECK(tlb_probe(&t, 2, 0) < 0, "no pid-2 entry survives");
+    CHECK(tlb_probe(&t, 1, 0) >= 0, "process 1 is completely unaffected");
 
     /* --------------------------------------------------------------- 11 */
     head("11.", "invalidate_frame -- a frame was reclaimed and reused");
-    tlb_impl_init(&t);
-    tlb_impl_insert(&t, 1, 0x05, 0x777);
-    tlb_impl_insert(&t, 2, 0x40, 0x777);        /* shared/aliased frame */
-    tlb_impl_insert(&t, 3, 0x41, 0x778);
-    tlb_impl_invalidate_frame(&t, 0x777);
+    tlb_init(&t);
+    tlb_insert(&t, 1, 0x05, 0x777);
+    tlb_insert(&t, 2, 0x40, 0x777);        /* shared/aliased frame */
+    tlb_insert(&t, 3, 0x41, 0x778);
+    tlb_invalidate_frame(&t, 0x777);
     check_lru(&t, "after invalidate_frame");
-    CHECK(tlb_impl_probe(&t, 1, 0x05) < 0 && tlb_impl_probe(&t, 2, 0x40) < 0,
+    CHECK(tlb_probe(&t, 1, 0x05) < 0 && tlb_probe(&t, 2, 0x40) < 0,
           "every mapping of frame 0x777 is gone, across all processes");
-    CHECK(tlb_impl_probe(&t, 3, 0x41) >= 0, "frame 0x778 is untouched");
+    CHECK(tlb_probe(&t, 3, 0x41) >= 0, "frame 0x778 is untouched");
     printf("    (this is the step that stops a reused frame returning stale data)\n");
 
     /* --------------------------------------------------------------- 12 */
     head("12.", "Freed slots are refilled before anything is evicted");
-    tlb_impl_init(&t);
-    for (i = 0; i < TLB_ENTRIES; i++) tlb_impl_insert(&t, 1, 0x10 + i, 0x400 + i);
-    tlb_impl_invalidate_pid(&t, 1);
+    tlb_init(&t);
+    for (i = 0; i < TLB_ENTRIES; i++) tlb_insert(&t, 1, 0x10 + i, 0x400 + i);
+    tlb_invalidate_pid(&t, 1);
     CHECK(live_entries(&t) == 0, "TLB emptied by process exit");
-    tlb_impl_reset_stats(&t);
+    tlb_reset_stats(&t);
     for (i = 0; i < TLB_ENTRIES; i++) {
-        tlb_impl_insert(&t, 2, 0x10 + i, 0x800 + i);
+        tlb_insert(&t, 2, 0x10 + i, 0x800 + i);
         check_lru(&t, "during refill");
     }
     CHECK(live_entries(&t) == TLB_ENTRIES, "refilled to %u entries", TLB_ENTRIES);
@@ -340,11 +340,11 @@ int main(int argc, char **argv)
 
     /* --------------------------------------------------------------- 13 */
     head("13.", "Statistics accounting");
-    tlb_impl_init(&t);
-    for (i = 0; i < 10; i++) tlb_impl_insert(&t, 1, i, 0x200 + i);
-    tlb_impl_reset_stats(&t);
-    for (i = 0; i < 10; i++) tlb_impl_lookup(&t, 1, i,  &pfn);   /* 10 hits   */
-    for (i = 0; i < 4;  i++) tlb_impl_lookup(&t, 1, 90 + i, &pfn); /* 4 misses */
+    tlb_init(&t);
+    for (i = 0; i < 10; i++) tlb_insert(&t, 1, i, 0x200 + i);
+    tlb_reset_stats(&t);
+    for (i = 0; i < 10; i++) tlb_lookup(&t, 1, i,  &pfn);   /* 10 hits   */
+    for (i = 0; i < 4;  i++) tlb_lookup(&t, 1, 90 + i, &pfn); /* 4 misses */
     CHECK(t.hits == 10,  "hits   = %llu (expected 10)", (unsigned long long)t.hits);
     CHECK(t.misses == 4, "misses = %llu (expected 4)",  (unsigned long long)t.misses);
     CHECK(t.hits + t.misses == 14, "every lookup was counted exactly once");
@@ -361,10 +361,10 @@ int main(int argc, char **argv)
            page it is about to need, so LRU degenerates to 0% -- the classic
            cyclic-reference worst case. */
         for (unsigned span = reach_pages; span <= reach_pages + 1; span++) {
-            tlb_impl_init(&t);
+            tlb_init(&t);
             for (i = 0; i < span; i++)                     /* warm up */
                 translate(&t, 1, i << PAGE_OFFSET_BITS, &pa);
-            tlb_impl_reset_stats(&t);
+            tlb_reset_stats(&t);
             for (pass = 0; pass < 10; pass++)
                 for (i = 0; i < span; i++)
                     translate(&t, 1, i << PAGE_OFFSET_BITS, &pa);
@@ -398,7 +398,7 @@ int main(int argc, char **argv)
            across live processes decides whether the TLB copes. */
         for (pages = 6; pages <= 12; pages += 6) {
             double hr;
-            tlb_impl_init(&t);
+            tlb_init(&t);
             walks = 0;
             for (unsigned round = 0; round < ROUNDS; round++)
                 for (uint32_t pid = 1; pid <= NPROC; pid++)
@@ -430,7 +430,7 @@ int main(int argc, char **argv)
     }
 
     /* ------------------------------------------------------------ report */
-    tlb_impl_dump(&t);
+    tlb_dump(&t);
 
     printf("\n========================================================\n");
     printf("  %d checks, %d failed\n", checks, failures);

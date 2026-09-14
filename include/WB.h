@@ -9,7 +9,18 @@
  * L1 is write-through and has no dirty bit, so every store is queued here
  * and drains to main memory.  Evictions do NOT pass through the buffer --
  * the L1<->L2 exchange is handled entirely by l2_promote.
- * The hierarchy tracks tags and addresses only, so an entry carries no data.
+ * WRITE COALESCING.  The unit of buffering is a 16 B BLOCK, per Q3's "write
+ * buffer with 4 blocks as buffer" -- not one slot per store.  A store to a
+ * block that is already queued merges into that entry and consumes no slot,
+ * so the buffer holds up to WB_ENTRIES DISTINCT blocks and each block appears
+ * at most once.  Only a store to a block that is not queued can stall.
+ *
+ * Consequences, accepted deliberately:
+ *   - The buffer records WHICH BLOCKS have pending writes, not which bytes.
+ *     A load of any byte of a queued block forwards from it.
+ *   - Coalescing relaxes store order: a later store to an already-queued
+ *     block drains at that block's original queue position.  This is a weak
+ *     memory model, which is what real write-combining buffers provide.
  * Entry layout -- 22 bits: valid 1 + block_addr 21
  */
 
@@ -48,9 +59,12 @@ static inline int wb_is_empty(const WriteBuffer *wb) {
     return wb->count == 0;
 }
 
-/* Appends at the tail.  Returns 1 if queued, 0 if the buffer was full and the
- * store was NOT queued -- the caller must drain the head and retry, and it is
- * the caller that counts the stall. DONE */
+/* Queues a store.  If pa's block is already buffered the store COALESCES into
+ * that entry -- no new slot, no stall, and the block keeps its queue position.
+ * Otherwise the block is appended at the tail.  Returns 1 if the store was
+ * absorbed (either way), 0 only if the block was new and all WB_ENTRIES slots
+ * hold other blocks -- then the caller drains the head, counts the stall and
+ * retries. DONE */
 int wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
 
 /*Removes head entry into *out and shifts the rest down. DONE*/
@@ -60,8 +74,16 @@ int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 int wb_flush_all(WriteBuffer *wb, void *ctx,
                  void (*sink)(void *ctx, const WBEntry *e));
 
-/*Compare for a hit, else return -1, try parallel. DONE*/
+/* Index of the entry holding pa's block, or -1.  Block granularity: a hit
+ * means the block has pending writes, not that these exact bytes do. DONE */
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
+
+/* Index of the oldest queued block living in physical frame `frame`, or -1.
+ * Main memory uses this before reclaiming a frame: a pending store to it MUST
+ * reach memory first, so the buffer is drained from the HEAD until this
+ * returns -1.  Draining head-first is what keeps the FIFO order intact --
+ * entries cannot be plucked from the middle. DONE */
+int wb_probe_frame(const WriteBuffer *wb, uint32_t frame);
 
 /* ---- debug ---- */
 void wb_dump(const WriteBuffer *wb);

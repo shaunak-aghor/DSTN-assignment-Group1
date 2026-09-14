@@ -199,3 +199,27 @@ void l1_write_hit(L1Cache *l1, uint32_t pa, int way)
 
     l1_age(l1, index, way);
 }
+/* A frame is PAGE_SIZE bytes = 64 L1 blocks, and because
+ * PAGE_OFFSET_BITS == L1_OFFSET_BITS + L1_INDEX_BITS, the L1 tag IS the frame
+ * number -- the frame's 64 blocks land one in each of the 64 sets, all sharing
+ * that tag.  So this is a single tag comparison per way. */
+int l1_invalidate_frame(L1Cache *l1, uint32_t frame)
+{
+    uint32_t tag = frame & (uint32_t)MASK(L1_TAG_BITS);
+    int      dropped = 0;
+
+    if (l1 == NULL)
+        return 0;
+
+    for (uint32_t s = 0; s < L1_SETS; s++)
+        for (int w = 0; w < L1_WAYS; w++) {
+            L1Line *line = &l1->sets[s].ways[w];
+
+            if (line->valid && line->tag == tag) {
+                l1_free_way(&l1->sets[s], w);   /* frees and closes the rank gap */
+                dropped++;
+            }
+        }
+
+    return dropped;
+}

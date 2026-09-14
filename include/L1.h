@@ -52,4 +52,9 @@ void l1_write_hit(L1Cache *l1, uint32_t pa, int way);
 /*Full eviction function, has to handle EVERYTHING with the l1 side of evicts. DONE*/
 int  l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa);
 
+/*Drops every line living in physical frame `frame`.  Called when main memory
+ *reclaims that frame: the cache is physically tagged, so those lines would
+ *otherwise serve the previous page's data.  Returns how many were dropped. DONE*/
+int  l1_invalidate_frame(L1Cache *l1, uint32_t frame);
+
 #endif

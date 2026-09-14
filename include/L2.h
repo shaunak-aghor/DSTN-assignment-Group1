@@ -52,6 +52,10 @@ void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
 
 uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);
 
+/*Drops every line living in physical frame `frame`, for the same reason as
+ *l1_invalidate_frame.  Returns how many were dropped. DONE*/
+int l2_invalidate_frame(L2Cache *l2, uint32_t frame);
+
 /*Does FIFO aging on insertion: increments valid lines' counters, drops touched way to 0. TODO*/
 void l2_age(L2Cache *l2, uint32_t index, int way);
 

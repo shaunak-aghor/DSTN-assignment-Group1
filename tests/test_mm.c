@@ -246,7 +246,7 @@ int main(int argc, char **argv)
         CHECK(st == MMU_OK_PAGE_FAULT, "reading the same page is allowed: %s",
               mmu_status_name(st));
         printf("    note: after this fill, protection is no longer re-checked on\n");
-        printf("    a TLB hit -- TLBImplEntry has no prot bits (see translate.h)\n");
+        printf("    a TLB hit -- TLBEntry has no prot bits (see translate.h)\n");
     }
 
     /* ---------------------------------------------------------------- 8 */
@@ -376,7 +376,7 @@ int main(int argc, char **argv)
             mmu_translate(&mmu, 1, (uint32_t)i << PAGE_OFFSET_BITS, ACC_READ, &pa);
 
         doomed_frame = procs[0].pt->entries[doomed_vpn].frame;
-        CHECK(tlb_impl_probe(&mmu.tlb, 1, doomed_vpn) >= 0,
+        CHECK(tlb_probe(&mmu.tlb, 1, doomed_vpn) >= 0,
               "page %u is cached in the TLB, mapping frame %u",
               doomed_vpn, doomed_frame);
 
@@ -394,7 +394,7 @@ int main(int argc, char **argv)
               mmu_status_name(st));
         CHECK(!procs[0].pt->entries[doomed_vpn].present,
               "the victim's PTE was cleared");
-        CHECK(tlb_impl_probe(&mmu.tlb, 1, doomed_vpn) < 0,
+        CHECK(tlb_probe(&mmu.tlb, 1, doomed_vpn) < 0,
               "its TLB entry is GONE -- otherwise a hit would hand back "
               "frame %u, which now holds page 60", doomed_frame);
         CHECK(mmu.tlb_invalidations >= 1, "%llu TLB entries invalidated",
@@ -407,7 +407,7 @@ int main(int argc, char **argv)
 
         /* Prove the TLB now resolves the frame to the NEW page. */
         mmu_translate(&mmu, 1, 60u << PAGE_OFFSET_BITS, ACC_READ, &pa2);
-        tlb_impl_lookup(&mmu.tlb, 1, 60, &got);
+        tlb_lookup(&mmu.tlb, 1, 60, &got);
         CHECK(got == doomed_frame, "TLB now maps page 60 -> frame %u", got);
     }
 
@@ -445,7 +445,7 @@ int main(int argc, char **argv)
         CHECK(procs[1].frames_held == held_before - 1,
               "pid 2's resident set dropped %u -> %u",
               held_before, procs[1].frames_held);
-        CHECK(tlb_impl_probe(&mmu.tlb, 2, victim_vpn) < 0,
+        CHECK(tlb_probe(&mmu.tlb, 2, victim_vpn) < 0,
               "and pid 2's TLB entry for it is gone");
         printf("    without mm_set_process_table() the fault would have cleared\n");
         printf("    the WRONG page table and left pid 2 pointing at pid 1's page\n");
@@ -512,10 +512,10 @@ int main(int argc, char **argv)
         for (k = 0; k < TLB_ENTRIES; k++)
             if (mmu.tlb.entries[k].valid && mmu.tlb.entries[k].pid == 2)
                 { CHECK(0, "a pid-2 TLB entry survived exit"); break; }
-        CHECK(tlb_impl_probe(&mmu.tlb, 2, 3) < 0,
+        CHECK(tlb_probe(&mmu.tlb, 2, 3) < 0,
               "every pid-2 TLB entry is gone -- PIDs are %u bits and get "
               "recycled, so this is mandatory", PID_BITS);
-        CHECK(procs[0].frames_held > 0 && tlb_impl_probe(&mmu.tlb, 1, 3) >= 0,
+        CHECK(procs[0].frames_held > 0 && tlb_probe(&mmu.tlb, 1, 3) >= 0,
               "pid 1 is completely unaffected");
         CHECK(!procs[1].active && procs[1].pt == NULL, "pid 2 is torn down");
     }
