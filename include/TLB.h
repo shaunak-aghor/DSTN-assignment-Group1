@@ -1,17 +1,11 @@
-#ifndef TLB_IMPL_H
-#define TLB_IMPL_H
+#ifndef TLB_H
+#define TLB_H
 
 #include <stdint.h>
 #include "MemHier.h"
 
 /*
- * Working implementation of the identifier(PID)-based TLB.
- *
- * Kept in its own header so that include/TLB.h is left untouched; merge the
- * two by renaming TLBImplEntry -> TLB_Entry, TLBImpl -> TLB and dropping the
- * tlb_impl_ prefix.  Note that TLB.h currently declares vpn as 22 bits, which
- * does not agree with VPN_BITS (8) in MemHier.h -- everything below follows
- * MemHier.h.
+ * Identifier(PID)-based TLB.
  *
  * Entry layout = 43 bits
  *     valid 1 + vpn VPN_BITS(8) + pfn FRAME_BITS(15) + pid PID_BITS(14) + lru 5
@@ -34,41 +28,37 @@ typedef struct {
     uint32_t pfn   : FRAME_BITS;    /* 15 */
     uint32_t pid   : PID_BITS;      /* 14 */
     uint32_t lru   : TLB_LRU_BITS;  /* 5, 0 = most recently used */
-} TLBImplEntry;
+} TLBEntry;
 
 typedef struct {
-    TLBImplEntry entries[TLB_ENTRIES];
-    /* statistics */
-    uint64_t hits;
-    uint64_t misses;
-    uint64_t evictions;             /* capacity evictions only */
-} TLBImpl;
+    TLBEntry entries[TLB_ENTRIES];
+} TLB;
 
-/* lifecycle */
-void tlb_impl_init(TLBImpl *t);
-void tlb_impl_reset_stats(TLBImpl *t);
+/* Invalidates every entry. */
+void tlb_init(TLB *t);
 
-/* Returns the matching entry index, or -1 on a miss. Does NOT touch the LRU
- * ranks and does NOT count a hit or a miss -- use it for inspection. */
-int  tlb_impl_probe(const TLBImpl *t, uint32_t pid, uint32_t vpn);
+/* Returns the entry holding (pid,vpn), or WAY_NONE.  No side effects. */
+int  tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn);
 
-/* The real lookup: on a hit returns 1, writes the frame through pfn_out and
- * makes the entry most recently used. On a miss returns 0. Counts both. */
-int  tlb_impl_lookup(TLBImpl *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out);
+/* Translates (pid,vpn) into *pfn_out; returns 1 on a hit, 0 on a miss. */
+int  tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out);
 
-/* Returns an invalid entry if there is one, otherwise the least recently
- * used entry. Always returns a valid index in 0 .. TLB_ENTRIES-1. */
-int  tlb_impl_select_victim(const TLBImpl *t);
+/* Returns an invalid entry if there is one, else the least recently used. */
+int  tlb_select_victim(const TLB *t);
 
-/* Fill after a page-table walk. Updates in place if (pid,vpn) is already
- * present, so at most one entry ever exists for a given pair. */
-void tlb_impl_insert(TLBImpl *t, uint32_t pid, uint32_t vpn, uint32_t pfn);
+/* Caches (pid,vpn)->pfn; returns 1 if it displaced a valid entry. */
+int  tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn);
 
-/* Invalidation -- each of these repairs a specific way the TLB can go stale */
-void tlb_impl_invalidate_entry(TLBImpl *t, uint32_t pid, uint32_t vpn); /* page evicted   */
-void tlb_impl_invalidate_pid(TLBImpl *t, uint32_t pid);                 /* process exited */
-void tlb_impl_invalidate_frame(TLBImpl *t, uint32_t pfn);               /* frame reused   */
+/* Invalidates the entry for one page. */
+void tlb_invalidate_entry(TLB *t, uint32_t pid, uint32_t vpn);
 
-void tlb_impl_dump(const TLBImpl *t);
+/* Invalidates every entry belonging to one process. */
+void tlb_invalidate_pid(TLB *t, uint32_t pid);
 
-#endif /* TLB_IMPL_H */
+/* Invalidates every entry mapping one physical frame. */
+void tlb_invalidate_frame(TLB *t, uint32_t pfn);
+
+/* Prints the valid entries. */
+void tlb_dump(const TLB *t);
+
+#endif /* TLB_H */

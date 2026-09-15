@@ -79,24 +79,18 @@ CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer
 
     if (l1_result == CACHE_HIT_L1) {
         l1_age(l1, L1_INDEX(pa), l1_probe(l1, pa));  /* a hit is a use: promote */
-        l1->read_hits++;
         return CACHE_HIT_L1;
     }
 
-    l1->read_misses++;
-
     if (l1_result == CACHE_HIT_WB) {
-        write_buffer->forwards++;
         return CACHE_HIT_WB;
     }
 
     if (l2_result == CACHE_HIT_L2) {
-        l2->hits++;
         l2_promote(l2, l1, search_pa); 
         return CACHE_HIT_L2;
     }
 
-    l2->misses++;
     /* Total Cache Miss - Handled by CPU abstraction */
     return CACHE_MISS; 
 }
@@ -143,31 +137,22 @@ CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffe
 
     if (l1_result == CACHE_HIT_L1) {
         l1_write_hit(l1, pa, l1_probe(l1, pa));   /* no data: ages to MRU */
-        l1->write_hits++;
 
         if (wb_is_full(write_buffer)) {
             /* One drain always suffices -- it frees exactly one slot. */
-            write_buffer->full_stalls++;
-            if (wb_drain_head(write_buffer, drained_out))
-                write_buffer->drains++;
+            wb_drain_head(write_buffer, drained_out);
         }
         wb_enqueue_store(write_buffer, pa);
-        write_buffer->enqueued_stores++;
 
         return CACHE_HIT_L1;        /* exclusive: L2 cannot hold it */
     }
 
-    l1->write_misses++;             /* no-write-allocate: L1 left as it was */
-
     if (l1_result == CACHE_HIT_WB) {
         if (wb_is_full(write_buffer)) {
             /* One drain always suffices -- it frees exactly one slot. */
-            write_buffer->full_stalls++;
-            if (wb_drain_head(write_buffer, drained_out))
-                write_buffer->drains++;
+            wb_drain_head(write_buffer, drained_out);
         }
         wb_enqueue_store(write_buffer, pa);
-        write_buffer->enqueued_stores++;
 
         return CACHE_HIT_WB;
     }
@@ -175,12 +160,8 @@ CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffe
     if (l2_result == CACHE_HIT_L2) {
         /* Write-through: the line is already correct and stays valid.
          * FIFO order is fixed at insertion, so it is NOT re-aged. */
-        l2->hits++;
-        l2->updated_writes++;
         return CACHE_HIT_L2;
     }
 
-    l2->misses++;
-    l2->passthrough_writes++;
     return CACHE_MISS;
 }

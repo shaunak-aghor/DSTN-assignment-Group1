@@ -31,37 +31,33 @@ typedef struct {
 typedef struct {
     L2Set sets[L2_SETS];
 
-    /* statistics */
-    uint64_t hits;
-    uint64_t misses;
-    uint64_t evictions;             /*victims discarded, never written back*/
-    uint64_t promotions;            /*blocks moved to L1 and invalidated here*/
-    uint64_t passthrough_writes;    /*stores that found no resident line*/
-    uint64_t updated_writes;        /*stores that updated a resident line*/
 } L2Cache;
 
-/*lifecycle TODO*/
+/* Invalidates every line. */
 void l2_init(L2Cache *l2);
-void l2_reset_stats(L2Cache *l2);
 
-/*Returns the matching way index, or -1 on a miss. TODO*/
+/* Returns the way holding pa, or WAY_NONE. */
 int  l2_probe(L2Cache *l2, uint32_t pa);
 
-/*Copies the block out and marks it invalid, returns 0 if address not present. TODO*/
+/* Moves pa's block from L2 into L1, demoting L1's victim back into L2. */
 void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
 
+/* Invalidates pa's line; returns pa if it was present, 0 otherwise. */
 uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);
 
-/*Does FIFO aging on insertion: increments valid lines' counters, drops touched way to 0. TODO*/
+/* Records `way` as the newest in its set's FIFO order. */
 void l2_age(L2Cache *l2, uint32_t index, int way);
 
-/*Handles allocation of way if invalid or FIFO, donot touch for stores. TODO*/
-void l2_allocate(L2Cache *l2, uint32_t pa);
+/* Installs pa; returns 1 if it displaced a valid line. */
+int  l2_allocate(L2Cache *l2, uint32_t pa);
 
-/*Returns 1 if a line was updated, 0 otherwise. Call only on write misses from L1. TODO*/
+/* Applies a store to a resident line; returns 1 if one was updated. */
 int  l2_write_through(L2Cache *l2, uint32_t pa, uint32_t len);
 
-/*Returns an invalid way if the set has one, else the way with the oldest FIFO counter. TODO*/
+/* Returns an invalid way if the set has one, else the oldest in FIFO order. */
 int  l2_select_victim(L2Cache *l2, uint32_t index);
+
+/* Drops every line in physical frame `frame`; returns how many. */
+int  l2_invalidate_frame(L2Cache *l2, uint32_t frame);
 
 #endif

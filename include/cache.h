@@ -13,15 +13,15 @@ typedef enum {
     CACHE_HIT_L2
 } CacheSearchResult;
 
-/*Load path: probes L1, the write buffer and L2, promoting on an L2 hit.*/
+/* Reads pa.  Returns where it was found, promoting from L2 into L1 on an L2
+ * hit.  On CACHE_MISS the caller must fetch the block and install it. */
 CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
-				 uint32_t pa);
+                             uint32_t pa);
 
-/*Store path. Returns where the block was found; the caller owns main memory.
- *CACHE_HIT_L1 or CACHE_HIT_WB means the store was queued in the write buffer,
- *anything else means the caller must mm_write() pa itself. If *drained_out comes back valid,
- *the buffer was full and the caller must send that entry to memory as well.*/
+/* Writes pa.  Returns where it was found.  CACHE_HIT_L1 and CACHE_HIT_WB mean
+ * the store was buffered; anything else means the caller must write it to
+ * memory.  A displaced buffer entry is returned through *drained_out. */
 CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
-				 uint32_t pa, WBEntry *drained_out);
+                              uint32_t pa, WBEntry *drained_out);
 
 #endif

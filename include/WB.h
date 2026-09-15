@@ -9,7 +9,18 @@
  * L1 is write-through and has no dirty bit, so every store is queued here
  * and drains to main memory.  Evictions do NOT pass through the buffer --
  * the L1<->L2 exchange is handled entirely by l2_promote.
- * The hierarchy tracks tags and addresses only, so an entry carries no data.
+ * WRITE COALESCING.  The unit of buffering is a 16 B BLOCK, per Q3's "write
+ * buffer with 4 blocks as buffer" -- not one slot per store.  A store to a
+ * block that is already queued merges into that entry and consumes no slot,
+ * so the buffer holds up to WB_ENTRIES DISTINCT blocks and each block appears
+ * at most once.  Only a store to a block that is not queued can stall.
+ *
+ * Consequences, accepted deliberately:
+ *   - The buffer records WHICH BLOCKS have pending writes, not which bytes.
+ *     A load of any byte of a queued block forwards from it.
+ *   - Coalescing relaxes store order: a later store to an already-queued
+ *     block drains at that block's original queue position.  This is a weak
+ *     memory model, which is what real write-combining buffers provide.
  * Entry layout -- 22 bits: valid 1 + block_addr 21
  */
 
@@ -28,42 +39,33 @@ typedef struct {
 typedef struct {
     WBEntry entries[WB_ENTRIES];
     uint8_t count;
-    /* statistics -- incremented by main, never by this module */
-    uint64_t enqueued_stores;
-    uint64_t drains;
-    uint64_t full_stalls;       /* stores that arrived at a full buffer */
-    uint64_t forwards;          /* reads satisfied by a buffer hit */
 } WriteBuffer;
 
-/*lifecycle DONE*/
+/* Empties the buffer. */
 void wb_init(WriteBuffer *wb);
-void wb_reset_stats(WriteBuffer *wb);
 
-/*capacity*/
-static inline int wb_is_full(const WriteBuffer *wb) {
-    return wb->count >= WB_ENTRIES;
-}
+/* Is the buffer full / empty? */
+static inline int wb_is_full(const WriteBuffer *wb)  { return wb->count >= WB_ENTRIES; }
+static inline int wb_is_empty(const WriteBuffer *wb) { return wb->count == 0; }
 
-static inline int wb_is_empty(const WriteBuffer *wb) {
-    return wb->count == 0;
-}
-
-/* Appends at the tail.  Returns 1 if queued, 0 if the buffer was full and the
- * store was NOT queued -- the caller must drain the head and retry, and it is
- * the caller that counts the stall. DONE */
+/* Queues a store, coalescing into the block's entry if it is already queued.
+ * Returns 1 if absorbed, 0 if the block was new and the buffer was full. */
 int wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
 
-/*Removes head entry into *out and shifts the rest down. DONE*/
+/* Removes the oldest entry into *out; returns 1, or 0 if the buffer is empty. */
 int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 
-/*Drains every entry through `sink`, in order. Returns how many. DONE*/
+/* Drains every entry through `sink`, oldest first; returns how many. */
 int wb_flush_all(WriteBuffer *wb, void *ctx,
                  void (*sink)(void *ctx, const WBEntry *e));
 
-/*Compare for a hit, else return -1, try parallel. DONE*/
+/* Returns the entry holding pa's block, or WAY_NONE. */
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
 
-/* ---- debug ---- */
+/* Returns the oldest entry in physical frame `frame`, or WAY_NONE. */
+int wb_probe_frame(const WriteBuffer *wb, uint32_t frame);
+
+/* Prints the queued entries. */
 void wb_dump(const WriteBuffer *wb);
 
 #endif /* WB_H */

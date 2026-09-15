@@ -2,19 +2,12 @@
 #include <string.h>
 #include "TLB.h"
 
-/* =====================================================================
- * LRU counter maintenance
- *
- * Ranks of the valid entries are a permutation of 0 .. (valid_count - 1),
- * with 0 = most recently used.  Making entry i the most recent means every
- * entry that was more recent than i ages by one, and i drops to 0.  Entries
- * that were already older than i keep their rank, so the permutation is
- * preserved and nothing can overflow TLB_LRU_BITS.
- *
- * A fresh fill sets lru = TLB_ENTRIES-1 first, which makes it the oldest,
- * and the same routine then promotes it -- so fill and hit share one path.
- * ===================================================================== */
-static void tlb_impl_touch(TLBImpl *t, unsigned i)
+
+/*
+tlb.h is used to touch the TLB at particular index.Touching it sets lru of entry i to 0 and all entries having rank<tlb[i].rank 
+shifts one place to right and all entries with rank>tlb[i].lru keeps its rank
+*/
+static void tlb_touch(TLB *t, unsigned i)
 {
     unsigned j;
     uint32_t rank = t->entries[i].lru;
@@ -26,11 +19,11 @@ static void tlb_impl_touch(TLBImpl *t, unsigned i)
     t->entries[i].lru = 0;
 }
 
-/* The mirror of tlb_impl_touch: dropping entry i would leave a hole in the
- * rank sequence, so every entry older than i closes up by one.  Without this
- * the ranks stay correctly *ordered* but stop being a permutation, and the
- * invariant the rest of the file relies on would be only half true. */
-static void tlb_impl_forget(TLBImpl *t, unsigned i)
+
+/*
+Deleting an entry needs to shift all entries having lru>rank to move one place to left and invalidating entry i
+*/
+static void tlb_forget(TLB *t, unsigned i)
 {
     unsigned j;
     uint32_t rank = t->entries[i].lru;
@@ -43,7 +36,10 @@ static void tlb_impl_forget(TLBImpl *t, unsigned i)
             t->entries[j].lru--;
 }
 
-void tlb_impl_init(TLBImpl *t)
+/* 
+this method initializes the tlb and sets lru counter of all entries to TLB_ENTRIES-1
+*/
+void tlb_init(TLB *t)
 {
     unsigned i;
 
@@ -52,20 +48,11 @@ void tlb_impl_init(TLBImpl *t)
         t->entries[i].lru = (uint32_t)(TLB_ENTRIES - 1);
 }
 
-void tlb_impl_reset_stats(TLBImpl *t)
-{
-    t->hits = t->misses = t->evictions = 0;
-}
 
-/* ---------------------------------------------------------------------
- * Lookup
- *
- * Three conditions decide a hit and all three matter: valid rejects stale
- * leftovers, pid keeps two processes that use the same VPN apart, and vpn
- * is the page being asked for.  Dropping the pid test is what would make
- * this an ordinary TLB that has to be flushed on every context switch.
- * ------------------------------------------------------------------ */
-int tlb_impl_probe(const TLBImpl *t, uint32_t pid, uint32_t vpn)
+/*
+tlb_probe checks if particular vpn->pfn mapping is present.Returns -1 if search unsuccessful
+*/
+int tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn)
 {
     unsigned i;
 
@@ -77,24 +64,26 @@ int tlb_impl_probe(const TLBImpl *t, uint32_t pid, uint32_t vpn)
     return -1;
 }
 
-int tlb_impl_lookup(TLBImpl *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
+/* 
+check if vpn->pfn mapping is present for a process identified by pid and if present populate pfn_out with physical frame number
+*/
+int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
 {
-    int i = tlb_impl_probe(t, pid, vpn);
+    int i = tlb_probe(t, pid, vpn);
 
-    if (i < 0) {
-        t->misses++;
+    if (i < 0)
         return 0;
-    }
     if (pfn_out) *pfn_out = t->entries[i].pfn;
-    tlb_impl_touch(t, (unsigned)i);
-    t->hits++;
+    tlb_touch(t, (unsigned)i);
     return 1;
 }
 
-/* ---------------------------------------------------------------------
- * Replacement
- * ------------------------------------------------------------------ */
-int tlb_impl_select_victim(const TLBImpl *t)
+
+/*
+Choose a victim for eviction. The entry that has highest value for lru counter is chosen for eviction.
+If an invalid entry is found->that entry gets selected as victim
+*/
+int tlb_select_victim(const TLB *t)
 {
     unsigned i;
     int      victim = 0;
@@ -112,64 +101,67 @@ int tlb_impl_select_victim(const TLBImpl *t)
     return victim;
 }
 
-void tlb_impl_insert(TLBImpl *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
+/* This method is used to insert an new vpn->pfn mapping for a given process pid */
+int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
 {
-    int i = tlb_impl_probe(t, pid, vpn);
+    int displaced;
+    int i;
 
-    /* Already cached: refresh the mapping instead of creating a duplicate.
-     * This is what guarantees at most one entry per (pid, vpn) whatever
-     * order the caller uses. */
+    tlb_invalidate_frame(t, pfn);
+
+    i = tlb_probe(t, pid, vpn);
+
+     /*case when pid vpn combination already exists in TLB */
     if (i >= 0) {
         t->entries[i].pfn = pfn & (uint32_t)MASK(FRAME_BITS);
-        tlb_impl_touch(t, (unsigned)i);
-        return;
+        tlb_touch(t, (unsigned)i);
+        return 0;
     }
 
-    i = tlb_impl_select_victim(t);
-    if (t->entries[i].valid)
-        t->evictions++;                    /* a real capacity eviction */
+    /* CASE when (pid,vpn) combination is not present in TLB in which case victim needs to be chosen*/
+    i = tlb_select_victim(t);
+    displaced = t->entries[i].valid ? 1 : 0;
 
+    /* populating alloted index i with new (pid,vpn) mapping*/
     t->entries[i].valid = 1;
     t->entries[i].pid   = pid & (uint32_t)MASK(PID_BITS);
     t->entries[i].vpn   = vpn & (uint32_t)MASK(VPN_BITS);
     t->entries[i].pfn   = pfn & (uint32_t)MASK(FRAME_BITS);
     t->entries[i].lru   = (uint32_t)(TLB_ENTRIES - 1);
-    tlb_impl_touch(t, (unsigned)i);        /* promote to most recently used */
+    tlb_touch(t, (unsigned)i);        /* promote to most recently used */
+
+    return displaced;
 }
 
-/* ---------------------------------------------------------------------
- * Invalidation
- *
- * A valid TLB entry is an assertion that the page table still says the same
- * thing.  Every event that can falsify it has to reach in here, or a later
- * hit would hand out a frame the process no longer owns.
- * ------------------------------------------------------------------ */
-void tlb_impl_invalidate_entry(TLBImpl *t, uint32_t pid, uint32_t vpn)
+
+/* used to invalidate a particular (pid,vpn) entry in TLB */
+void tlb_invalidate_entry(TLB *t, uint32_t pid, uint32_t vpn)
 {
-    int i = tlb_impl_probe(t, pid, vpn);
-    if (i >= 0) tlb_impl_forget(t, (unsigned)i);
+    int i = tlb_probe(t, pid, vpn);
+    if (i >= 0) tlb_forget(t, (unsigned)i);
 }
 
-void tlb_impl_invalidate_pid(TLBImpl *t, uint32_t pid)
+/* Invalidate all entries for a given pid - primarily used when process exits */
+void tlb_invalidate_pid(TLB *t, uint32_t pid)
 {
     unsigned i;
     for (i = 0; i < TLB_ENTRIES; i++)
         if (t->entries[i].valid &&
             t->entries[i].pid == (pid & (uint32_t)MASK(PID_BITS)))
-            tlb_impl_forget(t, i);
+            tlb_forget(t, i);
 }
 
-void tlb_impl_invalidate_frame(TLBImpl *t, uint32_t pfn)
+void tlb_invalidate_frame(TLB *t, uint32_t pfn)
 {
     unsigned i;
     for (i = 0; i < TLB_ENTRIES; i++)
         if (t->entries[i].valid &&
             t->entries[i].pfn == (pfn & (uint32_t)MASK(FRAME_BITS)))
-            tlb_impl_forget(t, i);
+            tlb_forget(t, i);
 }
 
-/* ------------------------------------------------------------------ */
-void tlb_impl_dump(const TLBImpl *t)
+/*TLB dump at end of program execution*/
+void tlb_dump(const TLB *t)
 {
     unsigned i, live = 0;
 
@@ -184,9 +176,5 @@ void tlb_impl_dump(const TLBImpl *t)
         live++;
     }
     if (!live) printf("  (all entries invalid)\n");
-    printf("  valid %u/%d | hits %llu | misses %llu | evictions %llu\n",
-           live, TLB_ENTRIES,
-           (unsigned long long)t->hits,
-           (unsigned long long)t->misses,
-           (unsigned long long)t->evictions);
+    printf("  valid %u/%d\n", live, TLB_ENTRIES);
 }

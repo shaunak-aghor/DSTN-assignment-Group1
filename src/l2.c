@@ -11,22 +11,6 @@ void l2_init(L2Cache *l2)
     memset(l2, 0, sizeof(*l2));
 }
 
-void l2_reset_stats(L2Cache *l2)
-{
-    if (l2 == NULL)
-        return;
-
-    l2->hits = 0;
-    l2->misses = 0;
-    l2->evictions = 0;
-    l2->promotions = 0;
-    l2->passthrough_writes = 0;
-    l2->updated_writes = 0;
-}
-
-/* Pure lookup: hits/misses are counted by the caller, not here.  A probe that
- * counted would be unsafe to cancel and would tally accesses L1 already
- * absorbed, so l2->hits/misses record only accesses that truly reached L2. */
 int l2_probe(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;
@@ -82,9 +66,7 @@ void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa)
     int has_eviction = 0;
 
     // 1. Invalidate the promoted block from L2 to enforce exclusivity
-    if (l2_invalidate(l2, pa)) {
-        l2->promotions++;
-    }
+    l2_invalidate(l2, pa);
     
     // 2. Install the promoted block into L1
     // 2. Extract victim from L1 safely before overwriting
@@ -159,32 +141,57 @@ int l2_select_victim(L2Cache *l2, uint32_t index)
     return oldest_way;
 }
 
-void l2_allocate(L2Cache *l2, uint32_t pa)
+int l2_allocate(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;
     uint32_t tag;
     int way;
+    int displaced;
     L2Line *line;
 
     if (l2 == NULL)
-        return;
+        return 0;
 
     index = L2_INDEX(pa);
     tag = L2_TAG(pa);
     way = l2_select_victim(l2, index);
 
     if (way < 0 || way >= L2_WAYS)
-        return;
+        return 0;
 
     line = &l2->sets[index].ways[way];
-
-    if (line->valid) {
-        l2->evictions++;
-    }
+    displaced = line->valid ? 1 : 0;
 
     line->valid = 1;
     line->tag = tag;
 
     l2_age(l2, index, way);
+
+    return displaced;
 }
 
+
+/* L2's tag and index do not line up with the page offset the way L1's do, so
+ * each line's frame is reconstructed from (tag, index) and compared.  No FIFO
+ * repair is needed: l2_select_victim skips invalid ways, and l2_age rewrites
+ * the row and column when the way is refilled. */
+int l2_invalidate_frame(L2Cache *l2, uint32_t frame)
+{
+    int dropped = 0;
+
+    if (l2 == NULL)
+        return 0;
+
+    for (uint32_t s = 0; s < L2_SETS; s++)
+        for (int w = 0; w < L2_WAYS; w++) {
+            L2Line *line = &l2->sets[s].ways[w];
+
+            if (line->valid &&
+                (uint32_t)PA_FRAME(L2_MAKE_PA(line->tag, s)) == frame) {
+                line->valid = 0;
+                dropped++;
+            }
+        }
+
+    return dropped;
+}
