@@ -19,7 +19,7 @@ typedef char vpn_fits_uint8[(PAGES_PER_PROC == 256 && VPN_BITS == 8) ? 1 : -1];
 #define ANY_PID     (-1)
 
 
-
+/* pop a frame from free list */
 static int frame_pop(MM *mm)
 {
     if (mm->free_count == 0)
@@ -27,6 +27,7 @@ static int frame_pop(MM *mm)
     return (int)mm->free_list[--mm->free_count];
 }
 
+/* Pushes frame f to the free list */
 static void frame_push(MM *mm, uint32_t f)
 {
     memset(&mm->frames[f], 0, sizeof(FrameDesc));   
@@ -51,7 +52,7 @@ static Process *proc_of(MM *mm, uint16_t pid)
 }
 
 
-/* initialize the main memory*/
+/* initialize the main memory -> all frames freed -> every process slot empty */
 int mm_init(MM *mm, Process *procs, uint16_t num_procs)
 {
     uint32_t i;
@@ -83,7 +84,8 @@ void mm_destroy(MM *mm)
 
 
 /*
-Frame allocation
+Frame allocation -> search (pid,vpn) combination and finds pfn for that (pid,vpn) pair
+Returns -1 if frame not present
 */
 
 int mm_alloc_frame(MM *mm, uint16_t pid, uint8_t vpn, FrameKind kind)
@@ -108,6 +110,10 @@ int mm_alloc_frame(MM *mm, uint16_t pid, uint8_t vpn, FrameKind kind)
 }
 
 
+/*
+Smallest aging register value is chosen for eviction->in case of tie: lowest frame number chosen for eviction
+ Smallest aging register wins; ties keep the lowest frame number, return -1 if no frame could be found for eviction
+*/
 
 static int pick_victim(const MM *mm, int pid_filter)
 {
@@ -140,13 +146,17 @@ static int pick_victim(const MM *mm, int pid_filter)
 
     return (best == NO_FRAME) ? -1 : (int)best;
 }
-
+/* return the coldest victim frame */
 int mm_select_victim(const MM *mm)
 {
     return pick_victim(mm, ANY_PID);
 }
 
 
+/*
+this is where LFU-with-aging gets its information.
+ * For every resident page:  aging = (aging >> 1) | (Accessed ? 0x80 : 0)
+*/
 
 void mm_age_tick(MM *mm, TLB *tlb)
 {
@@ -186,7 +196,12 @@ void mm_age_tick(MM *mm, TLB *tlb)
 }
 
 
-
+/* Reclaims frame f for reuse.  Control flow of function:
+  1. drain the write buffer of anything naming f
+  2. clear the owners pte and update frames_held count
+  3. report f through *out_frame so the caller can scrub TLB, L1 and L2
+  4. push f onto the free list
+ */
 static MMResult evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
                             uint32_t *out_frame)
 {
@@ -314,6 +329,7 @@ MMResult mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
  *  Processes
  * --------------------------------------------------------------------- */
 
+ /** set up process pages once it is picked for execution - allocate a frame for page table and prepage 2 pages into memory */
 int mm_create_process(MM *mm, Process *proc, uint16_t pid,
                       uint32_t lower_limit, uint32_t upper_limit)
 {
@@ -367,20 +383,20 @@ int mm_create_process(MM *mm, Process *proc, uint16_t pid,
     return 0;
 }
 
-
+/* track reads to main memory*/
 void mm_read_block(MM *mm, uint32_t pa)
 {
     (void)pa;
     if (!mm) return;
 }
-
+/* Tracks writes to main memory*/
 void mm_write(MM *mm, uint32_t pa)
 {
     (void)pa;
     if (!mm) return;
 }
 
-
+/* stats for Main memory */
 void mm_dump(const MM *mm)
 {
     uint32_t f, data = 0, pgtbl = 0;
