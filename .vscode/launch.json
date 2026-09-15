@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "/Users/christyjoseph/Downloads/DSTN-assignment-Group1-finalizing/src",
+      "program": "/Users/christyjoseph/Downloads/DSTN-assignment-Group1-finalizing/src/build/Debug/outDebug"
+    }
+  ]
+}
