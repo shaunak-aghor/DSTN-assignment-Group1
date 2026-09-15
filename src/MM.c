@@ -411,9 +411,12 @@ int mm_create_process(MM *mm, Process *proc, uint16_t pid,
     memset(proc, 0, sizeof(*proc));
     proc->pid = pid;
 
+    /* Both limits are clamped to what memory can actually honour: a process
+     * cannot hold fewer frames than its page table plus its two pre-paged
+     * pages, and cannot hold more pages than its address space has. */
     proc->lower_limit = (lower_limit < MIN_FRAMES_PER_PROC)
                       ? MIN_FRAMES_PER_PROC : lower_limit;
-    proc->upper_limit = (upper_limit == 0 || upper_limit > PAGES_PER_PROC)
+    proc->upper_limit = (upper_limit > PAGES_PER_PROC)
                       ? PAGES_PER_PROC : upper_limit;
     if (proc->upper_limit < proc->lower_limit)
         proc->upper_limit = proc->lower_limit;      /* a cap below the floor

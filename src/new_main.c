@@ -32,23 +32,17 @@
 #include "mmu.h"
 #include "cache.h"
 
-/* ---- knobs -- override at compile time, e.g. -DPROC_UPPER_LIMIT=8 ------- */
-#ifndef WRITE_PERCENT
-#define WRITE_PERCENT      30      /* 70% reads / 30% writes                 */
-#endif
-#ifndef AGE_TICK_INTERVAL
-#define AGE_TICK_INTERVAL  1000    /* accesses between OS sampling passes    */
-#endif
-#ifndef WB_DRAIN_INTERVAL
-#define WB_DRAIN_INTERVAL  10      /* accesses between background WB drains  */
-#endif
-#ifndef PROC_UPPER_LIMIT
-#define PROC_UPPER_LIMIT   0       /* 0 = no cap (PAGES_PER_PROC frames)     */
-#endif
-#ifndef PROC_LOWER_LIMIT
-#define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC                */
-#endif
-#define MAX_PROCS          20     /* upper bound on the CLI argument        */
+/* ---- tuning constants -- edit here and rebuild -------------------------- */
+#define WRITE_PERCENT      30                   /* 70% reads / 30% writes    */
+#define AGE_TICK_INTERVAL  1000                 /* accesses per aging pass   */
+#define WB_DRAIN_INTERVAL  10                   /* accesses per buffer drain */
+#define MAX_PROCS          20                   /* cap on the CLI argument   */
+
+/* Frames a process may hold, its page table included.  Lower the cap to put
+ * main memory under pressure: at the full 256 these traces never fill the
+ * 32768 frames, so no page is ever evicted and replacement never runs. */
+#define PROC_LOWER_LIMIT   MIN_FRAMES_PER_PROC  /* 3   */
+#define PROC_UPPER_LIMIT   PAGES_PER_PROC       /* 256 */
 
 /* ---- the machine ------------------------------------------------------- */
 static MM          mm;                  /* ~320 KB -- never a stack local */

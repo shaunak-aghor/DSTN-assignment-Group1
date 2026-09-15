@@ -141,7 +141,8 @@ int  mm_select_victim(const MM *mm);
  * and invalidates that TLB entry so the next access is forced to walk. */
 void mm_age_tick(MM *mm, TLB *tlb);
 
-/* Gives the process a pinned page table and its two pre-paged pages.
+/* Gives the process a pinned page table and its two pre-paged pages.  Both
+ * limits are in FRAMES and are clamped to MIN_FRAMES_PER_PROC..PAGES_PER_PROC.
  * Returns 0, or -1 if memory cannot seat it. */
 int  mm_create_process(MM *mm, Process *proc, uint16_t pid,
                        uint32_t lower_limit, uint32_t upper_limit);
