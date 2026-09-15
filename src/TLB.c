@@ -153,7 +153,6 @@ void tlb_invalidate_frame(TLB *t, uint32_t pfn)
             tlb_forget(t, i);
 }
 
-/* ------------------------------------------------------------------ */
 void tlb_dump(const TLB *t)
 {
     unsigned i, live = 0;
