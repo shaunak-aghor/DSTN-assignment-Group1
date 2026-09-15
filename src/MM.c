@@ -325,9 +325,6 @@ MMResult mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
     return r;
 }
 
-/* ------------------------------------------------------------------------
- *  Processes
- * --------------------------------------------------------------------- */
 
  /** set up process pages once it is picked for execution - allocate a frame for page table and prepage 2 pages into memory */
 int mm_create_process(MM *mm, Process *proc, uint16_t pid,
