@@ -11,7 +11,6 @@
  * Physical address : 25 bits = frame 15 + offset 10
  * Page / frame size: 1 KB   -> 32768 frames in 32 MB
  * Cache block      : 16 B
- * All is done here.
 */
 
 #define BLOCK_SIZE          16

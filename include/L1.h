@@ -4,8 +4,10 @@
 #include <stdint.h>
 #include "MemHier.h"
 
-/*Line layout = 18 bits = valid 1 + tag 15 + LRU 2
- *The hierarchy tracks tags only, there is no data payload anywhere.*/
+/*Line layout = 18 bits = valid 1 + tag 15 + LRU 2(4 ways)
+ *The hierarchy tracks tags only, there is no data payload anywhere.
+ *Uses no-write-allocate, no dirty bit, replacement using LRU.
+ */
 
 typedef struct {
     uint32_t  valid : 1;            /*1 bit*/

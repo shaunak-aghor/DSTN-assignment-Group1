@@ -2,18 +2,15 @@
 #include <string.h>
 #include "TLB.h"
 
-/* =====================================================================
- * LRU counter maintenance
- *
+/*
  * Ranks of the valid entries are a permutation of 0 .. (valid_count - 1),
  * with 0 = most recently used.  Making entry i the most recent means every
  * entry that was more recent than i ages by one, and i drops to 0.  Entries
  * that were already older than i keep their rank, so the permutation is
  * preserved and nothing can overflow TLB_LRU_BITS.
- *
  * A fresh fill sets lru = TLB_ENTRIES-1 first, which makes it the oldest,
  * and the same routine then promotes it -- so fill and hit share one path.
- * ===================================================================== */
+ */
 static void tlb_touch(TLB *t, unsigned i)
 {
     unsigned j;
@@ -52,14 +49,10 @@ void tlb_init(TLB *t)
         t->entries[i].lru = (uint32_t)(TLB_ENTRIES - 1);
 }
 
-/* ---------------------------------------------------------------------
- * Lookup
- *
- * Three conditions decide a hit and all three matter: valid rejects stale
- * leftovers, pid keeps two processes that use the same VPN apart, and vpn
- * is the page being asked for.  Dropping the pid test is what would make
- * this an ordinary TLB that has to be flushed on every context switch.
- * ------------------------------------------------------------------ */
+/*
+ * valid rejects stale leftovers, pid keeps two processes that use the same VPN apart, 
+ * and vpn is the page being asked for.
+ */
 int tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn)
 {
     unsigned i;
@@ -83,9 +76,7 @@ int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
     return 1;
 }
 
-/* ---------------------------------------------------------------------
- * Replacement
- * ------------------------------------------------------------------ */
+/* Replacement */
 int tlb_select_victim(const TLB *t)
 {
     unsigned i;
@@ -108,27 +99,12 @@ int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
 {
     int displaced;
     int i;
-
-    /* A frame holds exactly one page at a time (pure paging, no sharing), so
-     * ANY other entry still claiming pfn describes a mapping that no longer
-     * exists and must go.  The eviction path already does this -- MM calls
-     * tlb_invalidate_frame() before releasing a frame -- but repeating it
-     * here makes the one-entry-per-frame invariant hold on this function's own
-     * terms instead of depending on a caller three files away.
-     *
-     * Safe to repeat: invalidating a frame that has no entries matches nothing
-     * and changes nothing, so the usual double call costs one scan.
-     *
-     * Before the probe, deliberately: the refresh path below can point an
-     * existing (pid,vpn) at a NEW frame, and that frame may still be claimed by
-     * someone else -- a duplicate that never passes through the allocate path. */
     tlb_invalidate_frame(t, pfn);
 
     i = tlb_probe(t, pid, vpn);
 
     /* Already cached: refresh the mapping instead of creating a duplicate.
-     * This is what guarantees at most one entry per (pid, vpn) whatever
-     * order the caller uses. */
+     * This is what guarantees at most one entry per (pid, vpn) */
     if (i >= 0) {
         t->entries[i].pfn = pfn & (uint32_t)MASK(FRAME_BITS);
         tlb_touch(t, (unsigned)i);
@@ -148,13 +124,11 @@ int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
     return displaced;
 }
 
-/* ---------------------------------------------------------------------
- * Invalidation
- *
+/* Invalidation:
  * A valid TLB entry is an assertion that the page table still says the same
  * thing.  Every event that can falsify it has to reach in here, or a later
  * hit would hand out a frame the process no longer owns.
- * ------------------------------------------------------------------ */
+ */
 void tlb_invalidate_entry(TLB *t, uint32_t pid, uint32_t vpn)
 {
     int i = tlb_probe(t, pid, vpn);

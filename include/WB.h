@@ -7,20 +7,9 @@
 /*
  * Write buffer: 4 entries, FIFO, sits between L1 and main memory.
  * L1 is write-through and has no dirty bit, so every store is queued here
- * and drains to main memory.  Evictions do NOT pass through the buffer --
- * the L1<->L2 exchange is handled entirely by l2_promote.
- * WRITE COALESCING.  The unit of buffering is a 16 B BLOCK, per Q3's "write
- * buffer with 4 blocks as buffer" -- not one slot per store.  A store to a
- * block that is already queued merges into that entry and consumes no slot,
- * so the buffer holds up to WB_ENTRIES DISTINCT blocks and each block appears
- * at most once.  Only a store to a block that is not queued can stall.
+ * and drains to main memory. Evictions do NOT pass through the buffer, they are handled by
+ * and go straight to L2.
  *
- * Consequences, accepted deliberately:
- *   - The buffer records WHICH BLOCKS have pending writes, not which bytes.
- *     A load of any byte of a queued block forwards from it.
- *   - Coalescing relaxes store order: a later store to an already-queued
- *     block drains at that block's original queue position.  This is a weak
- *     memory model, which is what real write-combining buffers provide.
  * Entry layout -- 22 bits: valid 1 + block_addr 21
  */
 

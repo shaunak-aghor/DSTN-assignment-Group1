@@ -60,6 +60,7 @@ uint32_t l2_invalidate(L2Cache *l2, uint32_t pa)
     return 0;
 }
 
+/* Promotes a block from L2 to L1 */
 void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa)
 {
     uint32_t evicted_l1_pa = 0;
@@ -83,6 +84,7 @@ void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa)
     }
 }
 
+/* Ages a line in L2 cache to align with FIFO */
 void l2_age(L2Cache *l2, uint32_t index, int way)
 {
     L2Set *set;
@@ -103,6 +105,7 @@ void l2_age(L2Cache *l2, uint32_t index, int way)
     }
 }
 
+/* selects a victim and returns its index */
 int l2_select_victim(L2Cache *l2, uint32_t index)
 {
     L2Set *set;
@@ -114,14 +117,14 @@ int l2_select_victim(L2Cache *l2, uint32_t index)
 
     set = &l2->sets[index];
 
-    /* 1. If any way is invalid, return it immediately */
+    /* If any way is invalid, return it immediately */
     for (int j = 0; j < L2_WAYS; j++) {
         if (!set->ways[j].valid) {
             return j;
         }
     }
 
-    /* 2. All ways valid: find the way with the fewest 1s in its row (oldest) */
+    /* All ways valid: find the way with the fewest 1s in its row (oldest) */
     for (int i = 0; i < L2_WAYS; i++) {
         int count = 0;
         for (int j = 0; j < L2_WAYS; j++) {
@@ -141,6 +144,7 @@ int l2_select_victim(L2Cache *l2, uint32_t index)
     return oldest_way;
 }
 
+/* Allocates a line in L2 cache from a given pa */
 int l2_allocate(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;

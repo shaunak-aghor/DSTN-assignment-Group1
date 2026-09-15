@@ -106,9 +106,7 @@ static void l1_free_way(L1Set *set, int way)
 }
 
 /* Hands the victim's block base back through out_pa and frees the way.
- * Returns 1 if a line was evicted, 0 if the way was already free.  The caller
- * MUST give a returned block a home in L2: L1 and L2 are exclusive, so a block
- * dropped here and placed nowhere is lost. */
+ * Returns 1 if a line was evicted, 0 if the way was already free. */
 int l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa)
 {
     L1Set  *set;
@@ -132,11 +130,10 @@ int l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa)
 
 /* Installs pa into its set.  Call after l1_evict has freed a way, which is
  * what makes the placement case the normal one.
- *   -1  nothing installed: NULL cache, or l1_select_victim failed
- *    0  placement   -- the chosen way was free
- *    1  replacement -- the chosen way held a valid line, now overwritten
- * A 1 means the caller skipped the evict, and the overwritten block was
- * handed to nobody.  Under the evict-first sequence it should never happen. */
+ *   -1  nothing installed : NULL cache, or l1_select_victim failed
+ *    0  placement         : The chosen way was free
+ *    1  replacement       : The chosen way held a valid line, now overwritten
+ */
 int l1_install(L1Cache *l1, uint32_t pa)
 {
     uint32_t index;
@@ -165,10 +162,9 @@ int l1_install(L1Cache *l1, uint32_t pa)
     return replaced;
 }
 
-/* A store that hit in L1.  With no data to patch and no dirty bit, all this
- * does is promote the line -- the store itself reaches memory through the
- * write buffer, which main enqueues.  The tag check makes the header's "donot
- * bring miss to this" enforceable rather than a convention. */
+/* A store that hit in L1. With no data to patch and no dirty bit, all this
+ * does is promote the line, the store itself reaches memory through the
+ * write buffer, which main enqueues. */
 void l1_write_hit(L1Cache *l1, uint32_t pa, int way)
 {
     uint32_t index;
@@ -185,10 +181,7 @@ void l1_write_hit(L1Cache *l1, uint32_t pa, int way)
 
     l1_age(l1, index, way);
 }
-/* A frame is PAGE_SIZE bytes = 64 L1 blocks, and because
- * PAGE_OFFSET_BITS == L1_OFFSET_BITS + L1_INDEX_BITS, the L1 tag IS the frame
- * number -- the frame's 64 blocks land one in each of the 64 sets, all sharing
- * that tag.  So this is a single tag comparison per way. */
+/* Invalidates all lines in the L1 cache that belong to a specific frame. */
 int l1_invalidate_frame(L1Cache *l1, uint32_t frame)
 {
     uint32_t tag = frame & (uint32_t)MASK(L1_TAG_BITS);

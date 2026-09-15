@@ -7,17 +7,14 @@
 /*
  * Identifier(PID)-based TLB.
  *
- * Entry layout = 43 bits
+ * Entry layout = 43 bits:
  *     valid 1 + vpn VPN_BITS(8) + pfn FRAME_BITS(15) + pid PID_BITS(14) + lru 5
  *
  * Fully associative: all TLB_ENTRIES entries are compared on the pair
- * (pid, vpn).  Because every entry carries its owner's PID, the TLB is NOT
- * flushed on a context switch; entries die only when the page they map is
- * evicted or when the owning process terminates.
+ * Entries die only when the page they map is evicted or when the owning process terminates.
  *
- * Replacement: LRU counter, same convention as L1Line.lru -- 0 = most
- * recently used, TLB_ENTRIES-1 = least recently used.  The ranks of the
- * valid entries are always a permutation of 0 .. (number of valid - 1).
+ * Replacement: LRU counter, same convention as L1Line.lru.
+ * The ranks of the valid entries are always a permutation of 0 .. (number of valid - 1).
  */
 
 #define TLB_LRU_BITS 5              /* log2(TLB_ENTRIES) = log2(32) */

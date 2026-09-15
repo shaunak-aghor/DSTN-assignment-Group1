@@ -95,19 +95,13 @@ CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer
     return CACHE_MISS; 
 }
 
-/* Store path.  Same look-aside search as cache_read, then:
+/* Store path, same look-aside search as cache_read, then:
  *   L1 hit   line stays valid and becomes MRU, store is queued in the write
  *            buffer, CPU does not stall.
- *   WB hit   an older store to this block is still pending.  It must not be
- *            overtaken, so this store joins the queue behind it instead of
- *            racing ahead down the unbuffered path.
- *   L1 miss  no-write-allocate: nothing filled, promoted or demoted.  The store
+ *   WB hit   an older store to this block is still pending, so this store joins the queue.
+ *   L1 miss  no-write-allocate: nothing filled, promoted or demoted. The store
  *            goes straight to memory and STALLS, since L2 has no buffer.
- * Nothing here changes what is resident.  Main memory is the caller's job:
- * CACHE_HIT_L1 means the store was buffered, anything else means the caller
- * must mm_write() pa itself.  If *drained_out comes back valid the buffer was
- * full and the caller must send that entry to memory too -- passing NULL
- * DISCARDS a displaced store. */
+ */
 CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
                               uint32_t pa, WBEntry *drained_out)
 {
@@ -149,7 +143,7 @@ CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffe
 
     if (l1_result == CACHE_HIT_WB) {
         if (wb_is_full(write_buffer)) {
-            /* One drain always suffices -- it frees exactly one slot. */
+            /* One drain always suffices, saves time and it frees exactly one slot. */
             wb_drain_head(write_buffer, drained_out);
         }
         wb_enqueue_store(write_buffer, pa);
@@ -158,8 +152,10 @@ CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffe
     }
 
     if (l2_result == CACHE_HIT_L2) {
-        /* Write-through: the line is already correct and stays valid.
-         * FIFO order is fixed at insertion, so it is NOT re-aged. */
+        /* 
+         * Write-through: the line is already correct and stays valid.
+         * FIFO order is fixed at insertion, so it is NOT aged this time. 
+         */
         return CACHE_HIT_L2;
     }
 

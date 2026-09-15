@@ -15,15 +15,10 @@ void wb_init(WriteBuffer *wb)
     memset(wb, 0, sizeof(*wb));
 }
 
-/* Coalescing: a store whose block is already queued merges into that entry.
- * There is nothing to write -- the entry already asserts "this block has
- * pending writes" and the hierarchy carries no data -- so the merge is the
- * absence of an append.  It costs no slot and cannot stall, which is what
- * makes WB_ENTRIES a count of BLOCKS rather than of stores.
- *
+/*
  * The entry keeps its original queue position, so a later store to an older
- * block drains before an earlier store to a newer one.  That reordering is
- * inherent to write combining and is accepted here. */
+ * block drains before an earlier store to a newer one.
+ */
 int wb_enqueue_store(WriteBuffer *wb, uint32_t pa)
 {
     WBEntry *e;
@@ -32,7 +27,7 @@ int wb_enqueue_store(WriteBuffer *wb, uint32_t pa)
         return 0;
 
     if (wb_probe(wb, pa) >= 0)
-        return 1;               /* coalesced into the block already queued */
+        return 1;               /* comes into the block already queued */
 
     if (wb_is_full(wb))
         return 0;               /* caller drains the head and counts the stall */
@@ -76,10 +71,6 @@ int wb_flush_all(WriteBuffer *wb, void *ctx, void (*sink)(void *ctx, const WBEnt
     return drained;
 }
 
-/* Block granularity: a hit says the block has pending writes, not that these
- * particular bytes do.  Because enqueue coalesces, a block appears at most
- * once, so there is exactly one entry to find and no newest-wins tie to
- * resolve -- the scan direction is not load bearing. */
 int wb_probe(const WriteBuffer *wb, uint32_t pa)
 {
     uint32_t ba;

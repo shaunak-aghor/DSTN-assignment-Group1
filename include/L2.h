@@ -7,15 +7,13 @@
 
 /*
  * L2 cache: 32 KB, 16 B block, 8-way set associative.
- * Physically indexed, physically tagged.
  * Replacement: FIFO, 8x8 bit matrix per set (triangular state matrix).
  * Writes: write-through. Every write reaches MM at write time.
  * no dirty check, no stall, no write-back.
  * Exclusive with L1: a block promoted to L1 is invalidated here.
  * Line layout -- 14 bits:
  *   valid 1 + tag 13
- * Set metadata:
- *   fifo_matrix 8 bytes (row i, bit j = 1 if way i younger than way j)
+ *   fifo_matrix 8 bytes (row i, bit j = 1 if way i is younger than way j)
  */
 
 typedef struct {
