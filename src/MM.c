@@ -100,7 +100,16 @@ int mm_init(MM *mm, Process *procs, uint16_t num_procs)
 
 void mm_destroy(MM *mm)
 {
+    uint16_t i;
+
     if (!mm) return;
+
+    /* Page tables are the only heap allocation in the simulator. */
+    for (i = 0; i < mm->num_procs && mm->procs; i++) {
+        free(mm->procs[i].pt);
+        mm->procs[i].pt = NULL;
+    }
+
     memset(mm->frames, 0, sizeof(mm->frames));
     mm->free_count = 0;
 }

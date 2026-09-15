@@ -1,0 +1,352 @@
+================================================================================
+  DSTN Assignment #2 -- Question 3
+  Memory hierarchy simulator: TLB -> L1 -> L2 -> Main Memory
+  BITS Pilani, K. K. Birla Goa Campus   |   CS F446, I Semester 2026-2027
+================================================================================
+
+
+1. NAMES
+--------------------------------------------------------------------------------
+  Shaunak Aghor
+  Abhinandan Jain
+  Christy George Joseph
+
+  <<< FILL IN: percentage contribution of each member, and the modules each
+      person worked on.  Also list anyone outside the group you interacted
+      with significantly, or state "none". >>>
+
+
+2. FILES IN THIS DIRECTORY
+--------------------------------------------------------------------------------
+  README            This file.
+  Makefile          Builds the simulator.  `make` produces ./sim_q3.
+  .gitignore        Keeps build output and the benchmark traces out of the repo.
+
+  include/
+    MemHier.h       Every size, bit width and address-decomposition macro for
+                    the whole hierarchy.  Nothing here depends on any module,
+                    and every other header includes it.  Change the geometry
+                    here and it propagates everywhere.
+    TLB.h           32-entry, fully associative, PID-tagged TLB.  Entry layout
+                    and the lookup / insert / invalidate interface.
+    L1.h            L1 cache: 4 KB, 16 B blocks, 4-way, LRU counter.
+    L2.h            L2 cache: 32 KB, 16 B blocks, 8-way, FIFO square matrix.
+    WB.h            4-block write buffer, FIFO, with write coalescing.
+    cache.h         cache_read / cache_write -- ties L1, L2 and the write
+                    buffer together and implements the look-aside search.
+    MM.h            Main memory: frame table, page tables, page-fault handling
+                    and LFU-with-aging replacement.
+    mmu.h           Address translation: va_to_pa() and its result flags.
+
+  src/
+    TLB.c           TLB implementation.  LRU maintained by a counter per entry.
+    l1.c            L1 implementation.  LRU counter, victim selection, install,
+                    evict, frame invalidation.
+    l2.c            L2 implementation.  FIFO order kept in an 8x8 bit matrix;
+                    promotion into L1 and demotion back out of it.
+    WB.c            Write buffer.  A FIFO of block addresses that coalesces
+                    repeated stores to the same block into one entry.
+    cache.c         The two cache entry points.  L1 and L2 are probed
+                    concurrently to model L1's look-aside behaviour.
+    MM.c            Main memory.  Free list, frame allocation, the page-fault
+                    path, global LFU-with-aging victim selection, and the OS
+                    aging tick that samples Accessed bits.
+    mmu.c           va_to_pa(): TLB lookup, page-table walk, fault, TLB fill.
+    new_main.c      The driver.  Parses arguments, builds the machine, reads
+                    the trace, runs the access loop, and prints all statistics.
+
+  traces/           NOT INCLUDED -- see section 3.  The benchmark traces
+                    supplied with the assignment are unzipped into here.
+
+
+3. HOW TO COMPILE AND RUN
+--------------------------------------------------------------------------------
+  COMPILE
+      make                 produces ./sim_q3
+      make clean           removes obj/ and the binary
+
+      Requires gcc and pthreads.  Developed and tested on Linux; it also
+      builds on macOS, but see the note in section 6 about sem_init.
+
+  TRACES (required before running)
+      The benchmark traces are not part of this submission.  Unzip the file
+      supplied with the assignment into a traces/ subdirectory:
+
+          unzip BenchmarkTraces-20260914.zip -d traces/
+
+      Each trace line is one bare 8-hex-digit virtual address, nothing else.
+
+  RUN
+      ./sim_q3 <num_processes> <accesses_per_context_switch> <trace file>
+
+      e.g.  ./sim_q3 5 10 traces/2026_27_ISEM_CC1.txt
+
+      num_processes                1..16 address spaces, each with its own
+                                   page table
+      accesses_per_context_switch  after this many accesses the running PID
+                                   advances to the next process
+      trace file                   the address stream to run
+
+      The trace is walked ONCE from start to finish.  Every
+      <accesses_per_context_switch> accesses the owning process rotates, so
+      each process sees a different slice of the same stream through its own
+      address space.  It is NOT one trace per process.
+
+  COMPILE-TIME OPTIONS
+      Five constants in src/new_main.c can be overridden without editing it:
+
+          make clean
+          make CFLAGS="-Wall -Wextra -g -pthread -I./include -DPROC_UPPER_LIMIT=8"
+
+      WRITE_PERCENT      30     share of accesses treated as stores
+      WB_DRAIN_INTERVAL  10     accesses between background buffer drains
+      AGE_TICK_INTERVAL  1000   accesses between OS aging passes
+      PROC_UPPER_LIMIT   0      max frames per process (0 = 256)
+      PROC_LOWER_LIMIT   0      min frames per process (0 = 3)
+
+      PROC_UPPER_LIMIT is the important one.  At the default there are far
+      more frames (32768) than these traces touch, so NO page is ever evicted
+      and the replacement policy never runs.  Setting it to 8 or 16 forces
+      real page replacement -- see section 6, item 3.
+
+
+4. STRUCTURE OF THE PROGRAM
+--------------------------------------------------------------------------------
+  Each module owns exactly one structure and one policy.  No module keeps
+  statistics; each reports what happened through its return value, and the
+  driver decides what is worth counting.  The DRIVER owns the ordering.
+
+  ONE ACCESS, END TO END
+
+    va_to_pa(tlb, mm, proc, va, acc, wb, &pa, &evicted)
+        |
+        |  TLB hit?   -> done.  MAIN MEMORY IS NEVER TOUCHED, and the
+        |                Accessed bit is NOT re-set.
+        |  TLB miss?  -> walk the page table (one main-memory access, since
+        |                page tables live in memory and are never cached)
+        |                  not present? -> mm_handle_fault()
+        |                                    drains the write buffer of any
+        |                                    store to the victim frame, then
+        |                                    reclaims it and reports it back
+        |                set Accessed (and Dirty on a store) in the PTE
+        |                insert the translation into the TLB
+        v
+    driver: if a frame was reclaimed, invalidate it in L1 and L2.
+            va_to_pa already cleared the TLB, but L1 and L2 are PHYSICALLY
+            tagged and their lines would serve the previous page's data.
+        v
+    cache_write(...)                     |  cache_read(...)
+      L1 hit  -> queue in write buffer   |    L1 hit  -> done
+      WB hit  -> queue behind it         |    WB hit  -> forwarded
+      else    -> straight to memory and  |    L2 hit  -> promote to L1 and
+                 the CPU STALLS, because |               demote L1's victim
+                 L2 has no buffer of its |               into L2 (exclusive)
+                 own                     |    miss    -> fetch from memory,
+                                         |               install in L1, demote
+                                         |               L1's victim into L2
+        v
+    every WB_DRAIN_INTERVAL accesses:  drain one buffer entry to memory
+    every AGE_TICK_INTERVAL accesses:  mm_age_tick() -- the OS sampling pass
+
+  THE AGING TICK, AND WHY IT INVALIDATES TLB ENTRIES
+
+    LFU-with-aging needs to know which pages were used.  Hardware provides
+    one bit: the PTE's Accessed bit, written by the page-table walker.
+    mm_age_tick():
+
+      1. reads each resident page's Accessed bit out of the page table
+      2. shifts it into that frame's 8-bit aging register:
+             aging = (aging >> 1) | (Accessed ? 0x80 : 0)
+      3. clears the Accessed bit
+      4. INVALIDATES that TLB entry
+
+    Step 4 is not optional.  The Accessed bit is only ever set during a walk.
+    If the translation stays cached in the TLB, every subsequent access is a
+    TLB hit, the walker never runs, and the bit can never be set again -- a
+    red-hot page would read as stone cold and be evicted.  Dropping the entry
+    forces the next access to walk, which sets the bit again.
+
+  KEY DESIGN POINTS
+
+    - L1 and L2 are EXCLUSIVE.  A block lives in one or the other, never
+      both.  Every path that moves a block between them also moves the
+      displaced block the other way, or it is lost.
+    - Page tables occupy real frames, are counted against free memory and
+      against each process's frame budget, and are pinned (FRAME_PGTBL) so
+      replacement can never choose them.
+    - Main memory is metadata only.  Like the caches and the TLB, it tracks
+      frame ownership and state, not bytes.  There is no 32 MB array.
+    - The TLB is PID-tagged, so a context switch costs nothing: entries from
+      several processes coexist and none is flushed.
+    - The write buffer COALESCES.  Repeated stores to the same 16 B block
+      occupy one entry, which is what makes WB_ENTRIES a count of blocks
+      rather than of stores, as Q3 specifies.
+
+
+5. WHAT IS DONE AND WHAT IS NOT
+--------------------------------------------------------------------------------
+  COMPLETE AND WORKING
+
+    - TLB: 32 entries, fully associative, PID-tagged, LRU counter.
+      Invalidation by entry, by PID (process exit) and by frame.
+    - L1: 4 KB / 16 B / 4-way, LRU counter replacement, no-write-allocate,
+      write buffer, look-aside.
+    - L2: 32 KB / 16 B / 8-way, FIFO via an 8x8 bit matrix, write-through,
+      look-through, exclusive with L1.
+    - Write buffer: 4 blocks, FIFO, coalescing, stall-and-drain on a full
+      buffer, background drain, end-of-run flush.
+    - Main memory: 32 MB / 32768 frames, pure paging, global replacement with
+      LFU-with-aging, per-process lower and upper frame limits, page tables
+      resident in memory and pinned, 2-page pre-paging per process.
+    - Address translation with page-fault handling, and correct invalidation
+      of the TLB, L1 and L2 when a frame is reclaimed.
+    - Multiprogramming: N processes time-slicing one address stream with a
+      configurable context-switch quantum.
+    - Full statistics for every level.
+
+  NOT DONE
+
+    a) HIERARCHICAL PAGE TABLES.  The virtual address space is 18 bits with
+       a single-level 256-entry page table.  The supplied traces carry 32-bit
+       addresses, so the driver masks each to its low 18 bits.  See section 6,
+       item 1 for the consequence and the fix.
+
+    b) l2_write_through() is declared in include/L2.h but never implemented.
+       It is not called: L2's write-through behaviour is handled directly in
+       cache_write(), which updates a resident line in place and passes the
+       store to memory.  The declaration is left as documentation of where
+       that policy lives.  It should either be implemented or removed.
+
+    c) PROTECTION IS NOT ENFORCED.  PTE.prot exists and is set to RWX for
+       every page, but nothing checks it.  It cannot be meaningfully checked
+       either: the traces carry no read/write/execute information, so the
+       access type is synthesised, and enforcing a real permission against a
+       fabricated access type would be meaningless.  With more time we would
+       add prot bits to the TLB entry and a trace format that carries the
+       real access type.
+
+    d) NO COST MODEL.  Nothing has a latency, so the simulator reports hit
+       and miss counts but not AMAT.  This also means look-aside versus
+       look-through is invisible in the output, since the difference between
+       them is purely one of timing.
+
+    e) wb_flush_all(), mm_dump(), wb_dump() and tlb_dump() are implemented but
+       unused by the driver.  They were written for debugging and are left in
+       for the demonstration.
+
+  GREATEST DIFFICULTIES
+
+    - The traces contain only addresses -- no read/write flag, no PID, no
+      access size.  Since Q3's L1 write buffer, L2 write-through and the PTE
+      dirty bit all depend on stores existing, we had to synthesise the
+      access type.  This is described in section 6, item 2.
+    - Getting invalidation ordering right when a frame is reclaimed.  A stale
+      TLB entry is far more dangerous than a stale cache line, because a TLB
+      hit skips the page table entirely: there is no fault to catch it, and
+      the process silently reads another process's memory.  This is why the
+      TLB is always cleared first, and why main memory drains the write buffer
+      of the victim frame BEFORE deciding whether the page is dirty.
+    - The interaction between the write buffer and page replacement.  A queued
+      store holds a physical address, so if its frame is reclaimed before the
+      store drains, the write lands in whatever page takes that frame.
+
+
+6. KNOWN BUGS AND LIMITATIONS
+--------------------------------------------------------------------------------
+
+  1. VIRTUAL ADDRESSES ARE MASKED TO 18 BITS -- pages alias.
+     CAUSE: MemHier.h defines an 18-bit virtual address space (VPN 8 +
+     offset 10) and a flat 256-entry page table, but the traces carry 32-bit
+     addresses.  mmu.c masks each address to its low 18 bits, so two
+     addresses differing only above bit 17 map to the same page.  Measured on
+     the CC1 trace: 169 distinct 1 KB pages are touched but only 156 survive
+     the mask, so 13 pairs are conflated.  This slightly understates page
+     faults and slightly overstates locality.
+     FIX: a 3-level page table.  A 32-bit address with 1 KB pages gives a
+     22-bit VPN, split 6|8|8, each node being 256 entries = 1024 B = exactly
+     one frame.  A flat table would need 2^22 entries = 16 MB = 16384 frames
+     PER PROCESS, which is structurally impossible; measured on these traces
+     a 3-level table would allocate only 5-6 frames per process, because the
+     addresses cluster into two regions (heap around 0x1xxxxxxx and stack
+     around 0x7fff8xxx).
+
+  2. THE READ/WRITE SPLIT IS SYNTHESISED, NOT REAL.
+     CAUSE: the traces are address-only.  The driver marks WRITE_PERCENT
+     (30%) of accesses as stores using a seeded linear congruential generator.
+     Runs are therefore reproducible, but the workload's true store pattern,
+     its store locality and its dirty-page behaviour are not modelled.
+     FIX: a trace format carrying the access type, or a documented derivation
+     rule agreed with the instructor.
+
+  3. PAGE REPLACEMENT DOES NOT RUN AT THE DEFAULT LIMITS.
+     CAUSE: 32768 frames is far larger than these traces need.  Twenty
+     processes use about 2720 frames, 8% of memory, so mm_select_victim is
+     never called and LFU-with-aging is never exercised.  This is a property
+     of the workload, not a defect, but it means a default run reports zero
+     evictions and zero write-backs.
+     WORKAROUND: -DPROC_UPPER_LIMIT=8 produces about 22000 evictions and
+     8900 write-backs on the same trace.  The report prints a note when no
+     eviction occurred so this cannot be mistaken for a healthy result.
+
+  4. cache.c USES OS THREADS TO MODEL LOOK-ASIDE.
+     CAUSE: L1's look-aside behaviour is modelled by probing L1 and L2 in two
+     pthreads and cancelling the L2 thread if L1 answers first.  Look-aside is
+     a TIMING property, not a behavioural one: the resulting cache state is
+     identical to a sequential probe, so the threads buy nothing a simulator
+     can observe, and they cost two thread creations per memory access.
+     A second problem: sem_init() for unnamed semaphores is unimplemented on
+     macOS (it fails with ENOSYS), so on macOS the start barrier does not
+     work.  The code still produces correct results there because the
+     semaphore is only an ordering hint, but it is not doing what it claims.
+     Linux is unaffected.
+     FIX: replace with a sequential probe and express look-aside in the cost
+     model as max(t_L1, t_L2) instead of t_L1 + t_L2.  The statistics are
+     already deterministic, because no module counts anything inside a
+     cancellable thread -- all counting happens in the driver after both
+     threads have joined.
+
+  5. WRITE-BUFFER FORWARDING IS BLOCK-GRANULAR.
+     CAUSE: a buffer entry records a 16 B block address, not which bytes of
+     that block are pending.  A load of any byte in a queued block is reported
+     as a buffer hit even when the queued store touched different bytes.  This
+     over-reports forwards and under-reports accesses that should have reached
+     L2 or memory.
+     FIX: store the byte offset (the entry has 10 spare bits) and compare the
+     requested byte range against it.
+
+  6. A STORE THAT STRADDLES TWO BLOCKS IS RECORDED IN ONLY ONE.
+     CAUSE: STORE_WIDTH is 4 bytes and a block is 16 bytes, so a store at
+     block offset 13, 14 or 15 spans into the next block.  The write buffer
+     records only the first block.
+     FIX: split such a store into two buffer entries.
+
+  7. PTE.prot IS WRITTEN BUT NEVER READ.
+     See section 5(c).  It is set to RWX at process creation and no code ever
+     checks it, so no protection fault can occur.
+
+  8. STORE ORDERING IS NOT PRESERVED ACROSS THE TWO WRITE PATHS.
+     CAUSE: a store that hits L1 is buffered while a store that misses L1 goes
+     straight to memory, so the second can reach memory before the first.
+     This has no observable effect here -- there is one CPU, no DMA, and the
+     hierarchy carries no data -- and a single thread can never observe its
+     own stores out of order because loads check the buffer.  It would matter
+     on a multiprocessor.
+     FIX: route every store through the buffer, which is what real hardware
+     does for exactly this reason.
+
+  NO KNOWN CRASHES, MEMORY LEAKS OR RUN-TIME ERRORS.
+  The simulator runs to completion on all five supplied traces with 1, 2, 3,
+  5, 10 and 20 processes and a range of context-switch quanta.  Checked with
+  `leaks` on macOS: 0 leaks, 0 bytes.  The only heap allocation in the whole
+  simulator is one 1 KB page table per process, freed by mm_destroy().
+
+  INTERNAL CONSISTENCY CHECKS
+  The following identities are verified to hold on every run, and are the
+  main evidence that the statistics are correct:
+
+      L1 misses (read + write)          == L2 accesses (hits + misses)
+      L1 read misses - L2 promotions    == block fetches from memory
+      WB drains + unbuffered stores     == write arrivals at memory
+      TLB hits + TLB misses             == total accesses
+
+================================================================================

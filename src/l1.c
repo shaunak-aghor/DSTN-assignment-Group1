@@ -10,14 +10,6 @@ void l1_init(L1Cache *l1)
     }
 
     memset(l1, 0, sizeof(*l1));
-
-    for (uint32_t s = 0; s < L1_SETS; s++){
-        for (int j = 0; j < L1_WAYS; j++){
-            l1->sets[s].ways[j].lru = L1_WAYS - 1;
-            /* setting everything to INVALID and LRU(just in case, mostly not needed) */
-            l1->sets[s].ways[j].valid = 0;
-        }
-    }
 }
 
 int l1_probe(L1Cache *l1, uint32_t pa)

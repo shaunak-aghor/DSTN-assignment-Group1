@@ -128,7 +128,7 @@ typedef struct {
 /* Frees every frame and zeroes the process table.  Returns 0. */
 int  mm_init(MM *mm, Process *procs, uint16_t num_procs);
 
-/* Releases the frame table. */
+/* Releases the frame table and frees every process's page table. */
 void mm_destroy(MM *mm);
 
 /* Takes a free frame for (pid,vpn); returns the frame, or -1 if none is free. */
