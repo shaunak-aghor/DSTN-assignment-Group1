@@ -19,32 +19,22 @@ typedef enum {
     ACC_EXEC  = 2
 } AccessType;
 
-/*
- * Virtual address -> physical address, faulting the page in if it is missing.
- *
- *   0   success, *pa_out is valid
- *  -1   no such process, or main memory could not supply a frame at all --
- *       the caller should stop: the simulation is out of memory
- *
- * THE ACCESSED BIT.  On a TLB hit main memory is NEVER touched -- no walk, no
- * referenced bit, nothing.  The page may be hit a million times and the PTE
- * does not change; that is what makes a TLB worth having.  `referenced` is
- * written only by the walker, on a miss.  mm_age_tick() is what closes the
- * loop: it samples the bit, clears it, and SHOOTS DOWN the TLB entry so the
- * next access is forced to walk and set it again.
- *
- * EVICTION.  A fault can reclaim one frame.  If it did, its number is written
- * to *evicted_out (else MM_NO_FRAME).  The TLB is invalidated here, because
- * the TLB is in hand -- but L1 and L2 are physically tagged and hold that
- * frame's lines, so THE CALLER MUST invalidate them:
- *
- *     l1_invalidate_frame(&l1, evicted);
- *     l2_invalidate_frame(&l2, evicted);
- *
- * The write buffer is passed through to mm_handle_fault, which drains any
- * queued store to the victim before the frame is taken.
- */
+/* What one translation did.  The caller counts; no module keeps statistics. */
+typedef struct {
+    unsigned tlb_hit    : 1;   /* answered by the TLB, memory untouched   */
+    unsigned tlb_evict  : 1;   /* the TLB fill displaced a valid entry     */
+    unsigned faulted    : 1;   /* the page was not resident                */
+    unsigned disk_read  : 1;   /* a page was brought in from disk          */
+    unsigned wrote_back : 1;   /* the victim was dirty and was flushed     */
+    unsigned evicted    : 1;   /* a frame was reclaimed; see *evicted_out  */
+} XlateInfo;
+
+/* Translates va for `proc`, faulting the page in if it is not resident.
+ * Returns 0 with *pa_out set, or -1 when memory is exhausted.  Any reclaimed
+ * frame is written to *evicted_out and is already cleared from the TLB; the
+ * caller must clear it from L1 and L2.  *info reports what the access did. */
 int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
-             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out);
+             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out,
+             XlateInfo *info);
 
 #endif /* MMU_H */

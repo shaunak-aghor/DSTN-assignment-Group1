@@ -20,20 +20,6 @@ void l1_init(L1Cache *l1)
     }
 }
 
-void l1_reset_stats(L1Cache *l1)
-{
-    if (l1 == NULL){
-        /* Error case */
-        return;
-    }
-
-    l1->read_hits = 0;
-    l1->read_misses = 0;
-    l1->write_hits = 0;
-    l1->write_misses = 0;
-    l1->evictions = 0;
-}
-
 int l1_probe(L1Cache *l1, uint32_t pa)
 {
     uint32_t index;

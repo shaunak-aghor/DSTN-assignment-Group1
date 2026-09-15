@@ -11,22 +11,6 @@ void l2_init(L2Cache *l2)
     memset(l2, 0, sizeof(*l2));
 }
 
-void l2_reset_stats(L2Cache *l2)
-{
-    if (l2 == NULL)
-        return;
-
-    l2->hits = 0;
-    l2->misses = 0;
-    l2->evictions = 0;
-    l2->promotions = 0;
-    l2->passthrough_writes = 0;
-    l2->updated_writes = 0;
-}
-
-/* Pure lookup: hits/misses are counted by the caller, not here.  A probe that
- * counted would be unsafe to cancel and would tally accesses L1 already
- * absorbed, so l2->hits/misses record only accesses that truly reached L2. */
 int l2_probe(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;
@@ -82,9 +66,7 @@ void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa)
     int has_eviction = 0;
 
     // 1. Invalidate the promoted block from L2 to enforce exclusivity
-    if (l2_invalidate(l2, pa)) {
-        l2->promotions++;
-    }
+    l2_invalidate(l2, pa);
     
     // 2. Install the promoted block into L1
     // 2. Extract victim from L1 safely before overwriting
@@ -159,33 +141,33 @@ int l2_select_victim(L2Cache *l2, uint32_t index)
     return oldest_way;
 }
 
-void l2_allocate(L2Cache *l2, uint32_t pa)
+int l2_allocate(L2Cache *l2, uint32_t pa)
 {
     uint32_t index;
     uint32_t tag;
     int way;
+    int displaced;
     L2Line *line;
 
     if (l2 == NULL)
-        return;
+        return 0;
 
     index = L2_INDEX(pa);
     tag = L2_TAG(pa);
     way = l2_select_victim(l2, index);
 
     if (way < 0 || way >= L2_WAYS)
-        return;
+        return 0;
 
     line = &l2->sets[index].ways[way];
-
-    if (line->valid) {
-        l2->evictions++;
-    }
+    displaced = line->valid ? 1 : 0;
 
     line->valid = 1;
     line->tag = tag;
 
     l2_age(l2, index, way);
+
+    return displaced;
 }
 
 

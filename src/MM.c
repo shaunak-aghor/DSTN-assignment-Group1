@@ -105,12 +105,6 @@ void mm_destroy(MM *mm)
     mm->free_count = 0;
 }
 
-void mm_reset_stats(MM *mm)
-{
-    if (!mm) return;
-    mm->page_faults = mm->disk_reads = mm->disk_writebacks = 0;
-    mm->evictions   = mm->writes     = mm->block_fetches   = 0;
-}
 
 /* ------------------------------------------------------------------------
  *  Frame allocation
@@ -248,7 +242,7 @@ void mm_age_tick(MM *mm, TLB *tlb)
  * --------------------------------------------------------------------- */
 
 static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
-                        uint32_t *out_frame)
+                        uint32_t *out_frame, MMFault *info)
 {
     FrameDesc *fd = &mm->frames[f];
     uint16_t   pid;
@@ -269,7 +263,6 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
 
         if (!wb_drain_head(wb, &e))
             break;
-        wb->drains++;
 
         pa = WB_TO_PA(e.block_addr);
         df = (uint32_t)PA_FRAME(pa);
@@ -284,7 +277,6 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
             }
         }
 
-        mm->writes++;
     }
 
     pid = fd->pid;
@@ -295,8 +287,8 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
         PTE *pte = &ow->pt->entries[vpn];
 
         if (pte->present && pte->frame == f) {
-            if (pte->dirty)
-                mm->disk_writebacks++;      /* flush to disk before reuse */
+            if (pte->dirty && info)
+                info->wrote_back = 1;       /* flushed before reuse */
 
             pte->present    = 0;
             pte->frame      = 0;
@@ -312,7 +304,8 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
     if (out_frame)
         *out_frame = f;
 
-    mm->evictions++;
+    if (info)
+        info->evicted = 1;
     frame_push(mm, f);
 }
 
@@ -326,13 +319,15 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
  * --------------------------------------------------------------------- */
 
 int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
-                    WriteBuffer *wb, uint32_t *out_frame)
+                    WriteBuffer *wb, uint32_t *out_frame, MMFault *info)
 {
     PTE *pte;
     int  f;
 
     if (out_frame)
         *out_frame = MM_NO_FRAME;
+    if (info)
+        memset(info, 0, sizeof(*info));
 
     if (!mm || !proc || !proc->pt)
         return -1;
@@ -344,7 +339,6 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
     if (pte->present)
         return 0;
 
-    mm->page_faults++;
 
     /* 2. At the cap: the process may not grow, so it displaces itself.  This
      *    is local replacement forced by the upper limit, inside an otherwise
@@ -354,7 +348,7 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
         int v = pick_victim(mm, (int)proc->pid);
         if (v < 0)
             return -1;                  /* cap leaves no evictable page */
-        evict_frame(mm, (uint32_t)v, wb, out_frame);
+        evict_frame(mm, (uint32_t)v, wb, out_frame, info);
     }
 
     /* 3. A free frame. */
@@ -367,14 +361,14 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
         int v = mm_select_victim(mm);
         if (v < 0)
             return -1;
-        evict_frame(mm, (uint32_t)v, wb, out_frame);
+        evict_frame(mm, (uint32_t)v, wb, out_frame, info);
 
         f = mm_alloc_frame(mm, proc->pid, vpn, FRAME_DATA);
         if (f < 0)
             return -1;
     }
 
-    mm->disk_reads++;                   /* the page arrives from disk */
+    if (info) info->disk_read = 1;      /* the page arrives from disk */
 
     pte->present    = 1;
     pte->frame      = (uint32_t)f;
@@ -392,7 +386,6 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
 int mm_create_process(MM *mm, Process *proc, uint16_t pid,
                       uint32_t lower_limit, uint32_t upper_limit)
 {
-    uint64_t planned;
     uint32_t v;
     int      f;
 
@@ -441,16 +434,14 @@ int mm_create_process(MM *mm, Process *proc, uint16_t pid,
     /* Pre-page the first two pages.  These faults are planned, not demand
      * faults, so the counter is restored rather than decremented -- the pages
      * may already be present, in which case no fault occurred at all. */
-    planned = mm->page_faults;
     for (v = 0; v < 2; v++) {
         /* Frames are guaranteed free above, so these never evict. */
-        if (mm_handle_fault(mm, proc, (uint8_t)v, NULL, NULL) != 0) {
+        if (mm_handle_fault(mm, proc, (uint8_t)v, NULL, NULL, NULL) != 0) {
             free(proc->pt);
             proc->pt = NULL;
             return -1;
         }
     }
-    mm->page_faults = planned;
 
     return 0;
 }
@@ -466,14 +457,12 @@ void mm_read_block(MM *mm, uint32_t pa)
 {
     (void)pa;
     if (!mm) return;
-    mm->block_fetches++;
 }
 
 void mm_write(MM *mm, uint32_t pa)
 {
     (void)pa;
     if (!mm) return;
-    mm->writes++;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -493,12 +482,4 @@ void mm_dump(const MM *mm)
            (unsigned)NUM_FRAMES, PAGE_SIZE);
     printf("  free %u | data %u | page-table %u\n",
            (unsigned)mm->free_count, (unsigned)data, (unsigned)pgtbl);
-    printf("  faults %llu | disk reads %llu | writebacks %llu | evictions %llu\n",
-           (unsigned long long)mm->page_faults,
-           (unsigned long long)mm->disk_reads,
-           (unsigned long long)mm->disk_writebacks,
-           (unsigned long long)mm->evictions);
-    printf("  writes %llu | block fetches %llu\n",
-           (unsigned long long)mm->writes,
-           (unsigned long long)mm->block_fetches);
 }

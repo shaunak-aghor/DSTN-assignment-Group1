@@ -41,6 +41,13 @@
 /* No frame: what mm_handle_fault reports when it evicted nothing. */
 #define MM_NO_FRAME  ((uint32_t)-1)
 
+/* What one fault did.  The caller counts; this module keeps no statistics. */
+typedef struct {
+    unsigned disk_read  : 1;   /* a page was read in from disk            */
+    unsigned evicted    : 1;   /* a frame was reclaimed to make room      */
+    unsigned wrote_back : 1;   /* that frame was dirty and was flushed    */
+} MMFault;
+
 /* ---- protection flags ---- */
 #define PROT_READ   0x1
 #define PROT_WRITE  0x2
@@ -111,77 +118,42 @@ typedef struct {
 
     Process  *procs;                    /* the OS process table          */
     uint16_t  num_procs;                /* global replacement needs it   */
-
-    /* statistics */
-    uint64_t page_faults;               /* demand faults only            */
-    uint64_t disk_reads;
-    uint64_t disk_writebacks;           /* dirty victims flushed         */
-    uint64_t evictions;
-    uint64_t writes;                    /* write arrivals from the cache */
-    uint64_t block_fetches;             /* 16 B blocks read out to L1    */
 } MM;
 
-/* ---- lifecycle ----
- * mm_init ZEROES the process table it is given, so every slot starts with
- * pt == NULL and an uninitialised slot can never look like a live process. */
+/* Frees every frame and zeroes the process table.  Returns 0. */
 int  mm_init(MM *mm, Process *procs, uint16_t num_procs);
-void mm_destroy(MM *mm);
-void mm_reset_stats(MM *mm);
 
-/* ---- frames ----
- * Takes a FREE frame only; returns -1 when memory is full.  Making a frame
- * free is mm_select_victim + the eviction inside mm_handle_fault, so that
- * policy stays in one place. */
+/* Releases the frame table. */
+void mm_destroy(MM *mm);
+
+/* Takes a free frame for (pid,vpn); returns the frame, or -1 if none is free. */
 int  mm_alloc_frame(MM *mm, uint16_t pid, uint8_t vpn, FrameKind kind);
 
-/* Global LFU-with-aging victim, or -1 if nothing is evictable.  Skips free
- * frames, page-table frames, and any process already at its lower_limit.
- * Ranks on the aging register alone; ties break on the lowest frame number,
- * so the choice is deterministic and reproducible. */
+/* Returns the globally coldest evictable frame, or -1 if none can be taken. */
 int  mm_select_victim(const MM *mm);
 
-/* The OS's sampling pass, run on the replacement timer -- NOT on every access,
- * which is the whole point of aging.  For every resident page:
- *     aging = (aging >> 1) | (referenced ? 0x80 : 0)
- *     referenced = 0
- *     tlb_invalidate_entry(pid, vpn)      <-- the shootdown
- * The shootdown is not optional.  Clearing the bit while the translation is
- * still in the TLB means no walk ever happens again, so the bit stays 0
- * forever and a hot page looks stone cold.  Passing tlb == NULL skips it,
- * which is only correct in tests that do not use a TLB. */
+/* Samples every Accessed bit into its frame's aging register, clears the bit,
+ * and invalidates that TLB entry so the next access is forced to walk. */
 void mm_age_tick(MM *mm, TLB *tlb);
 
-/* ---- processes ----
- * Allocates the page table (one pinned frame + the struct), sets the limits,
- * and pre-pages pages 0 and 1 per the pre-paging requirement -- into MAIN
- * MEMORY only, never the caches, so the first fetch is still a cache miss.
- * Those two faults are planned and are not counted as demand faults.
- * Requires MIN_FRAMES_PER_PROC frames to be FREE up front, so pre-paging can
- * never evict.  Returns -1 if they are not -- which means too many processes
- * for this memory, and the caller should stop: the simulation is out of
- * memory.  That is also why this needs no write buffer. */
+/* Gives the process a pinned page table and its two pre-paged pages.
+ * Returns 0, or -1 if memory cannot seat it. */
 int  mm_create_process(MM *mm, Process *proc, uint16_t pid,
                        uint32_t lower_limit, uint32_t upper_limit);
 
-/* The demand-paging path.  0 on success, -1 if no frame could be obtained.
- *
- * At most ONE frame is evicted per call.  If one was, its number is written to
- * *out_frame (else MM_NO_FRAME), and THE CALLER MUST then invalidate it in the
- * TLB, L1 and L2 -- they are physically tagged, and a stale TLB hit skips the
- * page table entirely and hands the dead frame straight back.
- *
- * `wb` is the one structure main memory handles itself, because it must: a
- * queued store to the victim has not reached memory yet, and it has to land
- * BEFORE the write-back decision.  Both may be NULL. */
+/* Makes vpn resident, evicting a frame if necessary.  Returns 0, or -1 when
+ * no frame can be obtained.  Any reclaimed frame is written to *out_frame and
+ * MUST then be invalidated by the caller in the TLB, L1 and L2. */
 int  mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
-                     WriteBuffer *wb, uint32_t *out_frame);
+                     WriteBuffer *wb, uint32_t *out_frame, MMFault *info);
 
-/* ---- data access ----
- * No bytes move and no reference state is touched -- the MMU owns that.
- * These only count traffic that genuinely reached main memory. */
-void mm_read_block(MM *mm, uint32_t pa);    /* cache miss fill  */
-void mm_write(MM *mm, uint32_t pa);         /* write arrival    */
+/* Records a block fetch from memory. */
+void mm_read_block(MM *mm, uint32_t pa);
 
+/* Records a write arriving at memory. */
+void mm_write(MM *mm, uint32_t pa);
+
+/* Prints frame occupancy. */
 void mm_dump(const MM *mm);
 
 #endif /* MM_H */

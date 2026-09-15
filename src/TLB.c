@@ -52,11 +52,6 @@ void tlb_init(TLB *t)
         t->entries[i].lru = (uint32_t)(TLB_ENTRIES - 1);
 }
 
-void tlb_reset_stats(TLB *t)
-{
-    t->hits = t->misses = t->evictions = 0;
-}
-
 /* ---------------------------------------------------------------------
  * Lookup
  *
@@ -81,13 +76,10 @@ int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
 {
     int i = tlb_probe(t, pid, vpn);
 
-    if (i < 0) {
-        t->misses++;
+    if (i < 0)
         return 0;
-    }
     if (pfn_out) *pfn_out = t->entries[i].pfn;
     tlb_touch(t, (unsigned)i);
-    t->hits++;
     return 1;
 }
 
@@ -112,8 +104,9 @@ int tlb_select_victim(const TLB *t)
     return victim;
 }
 
-void tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
+int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
 {
+    int displaced;
     int i;
 
     /* A frame holds exactly one page at a time (pure paging, no sharing), so
@@ -139,12 +132,11 @@ void tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
     if (i >= 0) {
         t->entries[i].pfn = pfn & (uint32_t)MASK(FRAME_BITS);
         tlb_touch(t, (unsigned)i);
-        return;
+        return 0;
     }
 
     i = tlb_select_victim(t);
-    if (t->entries[i].valid)
-        t->evictions++;                    /* a real capacity eviction */
+    displaced = t->entries[i].valid ? 1 : 0;
 
     t->entries[i].valid = 1;
     t->entries[i].pid   = pid & (uint32_t)MASK(PID_BITS);
@@ -152,6 +144,8 @@ void tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
     t->entries[i].pfn   = pfn & (uint32_t)MASK(FRAME_BITS);
     t->entries[i].lru   = (uint32_t)(TLB_ENTRIES - 1);
     tlb_touch(t, (unsigned)i);        /* promote to most recently used */
+
+    return displaced;
 }
 
 /* ---------------------------------------------------------------------
@@ -201,9 +195,5 @@ void tlb_dump(const TLB *t)
         live++;
     }
     if (!live) printf("  (all entries invalid)\n");
-    printf("  valid %u/%d | hits %llu | misses %llu | evictions %llu\n",
-           live, TLB_ENTRIES,
-           (unsigned long long)t->hits,
-           (unsigned long long)t->misses,
-           (unsigned long long)t->evictions);
+    printf("  valid %u/%d\n", live, TLB_ENTRIES);
 }

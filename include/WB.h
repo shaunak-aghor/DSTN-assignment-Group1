@@ -39,53 +39,33 @@ typedef struct {
 typedef struct {
     WBEntry entries[WB_ENTRIES];
     uint8_t count;
-    /* statistics -- incremented by main, never by this module */
-    uint64_t enqueued_stores;
-    uint64_t drains;
-    uint64_t full_stalls;       /* stores that arrived at a full buffer */
-    uint64_t forwards;          /* reads satisfied by a buffer hit */
 } WriteBuffer;
 
-/*lifecycle DONE*/
+/* Empties the buffer. */
 void wb_init(WriteBuffer *wb);
-void wb_reset_stats(WriteBuffer *wb);
 
-/*capacity*/
-static inline int wb_is_full(const WriteBuffer *wb) {
-    return wb->count >= WB_ENTRIES;
-}
+/* Is the buffer full / empty? */
+static inline int wb_is_full(const WriteBuffer *wb)  { return wb->count >= WB_ENTRIES; }
+static inline int wb_is_empty(const WriteBuffer *wb) { return wb->count == 0; }
 
-static inline int wb_is_empty(const WriteBuffer *wb) {
-    return wb->count == 0;
-}
-
-/* Queues a store.  If pa's block is already buffered the store COALESCES into
- * that entry -- no new slot, no stall, and the block keeps its queue position.
- * Otherwise the block is appended at the tail.  Returns 1 if the store was
- * absorbed (either way), 0 only if the block was new and all WB_ENTRIES slots
- * hold other blocks -- then the caller drains the head, counts the stall and
- * retries. DONE */
+/* Queues a store, coalescing into the block's entry if it is already queued.
+ * Returns 1 if absorbed, 0 if the block was new and the buffer was full. */
 int wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
 
-/*Removes head entry into *out and shifts the rest down. DONE*/
+/* Removes the oldest entry into *out; returns 1, or 0 if the buffer is empty. */
 int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 
-/*Drains every entry through `sink`, in order. Returns how many. DONE*/
+/* Drains every entry through `sink`, oldest first; returns how many. */
 int wb_flush_all(WriteBuffer *wb, void *ctx,
                  void (*sink)(void *ctx, const WBEntry *e));
 
-/* Index of the entry holding pa's block, or -1.  Block granularity: a hit
- * means the block has pending writes, not that these exact bytes do. DONE */
+/* Returns the entry holding pa's block, or WAY_NONE. */
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
 
-/* Index of the oldest queued block living in physical frame `frame`, or -1.
- * Main memory uses this before reclaiming a frame: a pending store to it MUST
- * reach memory first, so the buffer is drained from the HEAD until this
- * returns -1.  Draining head-first is what keeps the FIFO order intact --
- * entries cannot be plucked from the middle. DONE */
+/* Returns the oldest entry in physical frame `frame`, or WAY_NONE. */
 int wb_probe_frame(const WriteBuffer *wb, uint32_t frame);
 
-/* ---- debug ---- */
+/* Prints the queued entries. */
 void wb_dump(const WriteBuffer *wb);
 
 #endif /* WB_H */

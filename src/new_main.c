@@ -58,9 +58,26 @@ static L1Cache     l1;
 static L2Cache     l2;
 static WriteBuffer wb;
 
-/* ---- driver-side statistics -------------------------------------------- */
-static uint64_t n_access, n_read, n_write, n_switch, n_ticks;
-static uint64_t n_l1_fill;              /* total misses that fetched a block */
+/* ---- statistics ---------------------------------------------------------
+ * Every counter lives here.  No module keeps statistics of its own: they
+ * report what happened through return values, and the driver decides what is
+ * worth counting. */
+static struct {
+    uint64_t accesses, reads, writes, switches, ticks;
+
+    uint64_t tlb_hits, tlb_misses, tlb_evictions;
+
+    uint64_t l1_read_hits, l1_read_misses;
+    uint64_t l1_write_hits, l1_write_misses, l1_evictions;
+
+    uint64_t l2_hits, l2_misses, l2_promotions, l2_evictions;
+    uint64_t l2_updated_writes, l2_passthrough_writes;
+
+    uint64_t wb_enqueued, wb_drains, wb_stalls, wb_forwards;
+
+    uint64_t page_faults, disk_reads, disk_writebacks, mm_evictions;
+    uint64_t mm_writes, mm_block_fetches;
+} st;
 
 /* Deterministic read/write split: the same trace always produces the same
  * sequence, which is what makes a run reproducible. */
@@ -76,82 +93,97 @@ static int is_write(void)
  * ----------------------------------------------------------------------- */
 static int do_access(Process *proc, uint32_t va, AccessType acc)
 {
-    uint32_t pa, evicted;
-    WBEntry  drained;
+    uint32_t  pa, evicted;
+    WBEntry   drained;
+    XlateInfo x;
 
-    n_access++;
-    if (acc == ACC_WRITE) n_write++; else n_read++;
+    st.accesses++;
+    if (acc == ACC_WRITE) st.writes++; else st.reads++;
 
-    /* --- 1. translate ---------------------------------------------------
-     * Faults the page in if needed.  va_to_pa invalidates the TLB itself,
-     * because it holds it; it cannot reach the caches. */
-    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted) != 0)
+    /* --- 1. translate --------------------------------------------------- */
+    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted, &x) != 0)
         return -1;
 
-    /* --- 2. finish the eviction ----------------------------------------
-     * L1 and L2 are PHYSICALLY tagged: lines of a reclaimed frame would
-     * serve the previous page's data once the frame is refilled. */
+    if (x.tlb_hit) st.tlb_hits++; else st.tlb_misses++;
+    if (x.tlb_evict)  st.tlb_evictions++;
+    if (x.faulted)    st.page_faults++;
+    if (x.disk_read)  st.disk_reads++;
+    if (x.wrote_back) st.disk_writebacks++;
+    if (x.evicted)    st.mm_evictions++;
+
+    /* --- 2. finish the eviction ------------------------------------------
+     * L1 and L2 are PHYSICALLY tagged: lines of a reclaimed frame would serve
+     * the previous page's data once the frame is refilled. */
     if (evicted != MM_NO_FRAME) {
         l1_invalidate_frame(&l1, evicted);
         l2_invalidate_frame(&l2, evicted);
     }
 
-    /* --- 3. the access itself ------------------------------------------ */
+    /* --- 3. the access itself -------------------------------------------- */
     if (acc == ACC_WRITE) {
         CacheSearchResult r = cache_write(&l1, &l2, &wb, pa, &drained);
 
-        /* The buffer was full and its head was displaced to make room --
-         * that store reaches memory now. */
-        if (drained.valid)
-            mm_write(&mm, WB_TO_PA(drained.block_addr));
+        if (r == CACHE_HIT_L1) st.l1_write_hits++; else st.l1_write_misses++;
 
-        /* L2 has no write buffer of its own (Q3), so a store that missed L1
-         * goes straight to memory and the CPU stalls. */
-        if (r != CACHE_HIT_L1 && r != CACHE_HIT_WB)
+        if (r == CACHE_HIT_L1 || r == CACHE_HIT_WB) {
+            st.wb_enqueued++;                 /* the store was buffered */
+            if (drained.valid) {              /* it arrived at a full buffer */
+                st.wb_stalls++;
+                st.wb_drains++;
+                mm_write(&mm, WB_TO_PA(drained.block_addr));
+                st.mm_writes++;
+            }
+        } else {
+            /* L2 has no write buffer of its own, so the store goes straight
+             * to memory and the CPU stalls. */
+            if (r == CACHE_HIT_L2) { st.l2_hits++;   st.l2_updated_writes++; }
+            else                   { st.l2_misses++; st.l2_passthrough_writes++; }
             mm_write(&mm, pa);
+            st.mm_writes++;
+        }
     } else {
         CacheSearchResult r = cache_read(&l1, &l2, &wb, pa);
 
+        if (r == CACHE_HIT_L1) st.l1_read_hits++; else st.l1_read_misses++;
+        if (r == CACHE_HIT_WB) st.wb_forwards++;
+        if (r == CACHE_HIT_L2) { st.l2_hits++; st.l2_promotions++; }
+
         if (r == CACHE_MISS) {
-            /* Fetch the block and install it in L1.  L1 and L2 are EXCLUSIVE,
-             * so the block goes to L1 only -- and L1's victim must be demoted
-             * into L2, or it is lost.  Evict first so the victim is known. */
+            /* L1 and L2 are EXCLUSIVE: the block goes to L1 only, and L1's
+             * victim must be demoted into L2 or it is lost.  Evict first so
+             * the victim is known. */
             uint32_t idx = (uint32_t)L1_INDEX(pa);
             int      way = l1_select_victim(&l1, idx);
             uint32_t victim_pa = 0;
             int      displaced = l1_evict(&l1, idx, way, &victim_pa);
 
+            st.l2_misses++;
             mm_read_block(&mm, pa);
-            n_l1_fill++;
+            st.mm_block_fetches++;
 
             l1_install(&l1, pa);
-            if (displaced)
-                l2_allocate(&l2, victim_pa);
+            if (displaced) {
+                st.l1_evictions++;
+                if (l2_allocate(&l2, victim_pa))
+                    st.l2_evictions++;
+            }
         }
     }
 
-    /* --- 4. background write-buffer drain ------------------------------
-     * A real write buffer empties itself whenever the memory bus is idle; it
-     * is a shock absorber, not a parking spot.  Draining only when a store
-     * finds it full makes it permanently full, so nearly every store stalls.
-     * One entry every WB_DRAIN_INTERVAL accesses stands in for that idle-cycle
-     * drain, and it also stops an entry lingering long enough for its frame to
-     * be reclaimed underneath it. */
-    if (n_access % WB_DRAIN_INTERVAL == 0) {
+    /* --- 4. background write-buffer drain -------------------------------- */
+    if (st.accesses % WB_DRAIN_INTERVAL == 0) {
         WBEntry bg;
         if (wb_drain_head(&wb, &bg)) {
-            wb.drains++;
+            st.wb_drains++;
             mm_write(&mm, WB_TO_PA(bg.block_addr));
+            st.mm_writes++;
         }
     }
 
-    /* --- 5. the OS sampling pass ---------------------------------------
-     * Not per access -- that is the whole point of aging.  Clearing an
-     * Accessed bit also shoots down its TLB entry, or the translation would
-     * stay cached and the bit could never be set again. */
-    if (n_access % AGE_TICK_INTERVAL == 0) {
+    /* --- 5. the OS sampling pass ----------------------------------------- */
+    if (st.accesses % AGE_TICK_INTERVAL == 0) {
         mm_age_tick(&mm, &tlb);
-        n_ticks++;
+        st.ticks++;
     }
 
     return 0;
@@ -167,66 +199,68 @@ static double pct(uint64_t part, uint64_t whole)
 
 static void report(uint16_t nproc, uint64_t quantum, const char *trace)
 {
-    uint64_t l1_acc = l1.read_hits + l1.read_misses + l1.write_hits + l1.write_misses;
-    uint64_t l1_hit = l1.read_hits + l1.write_hits;
-    uint64_t l2_acc = l2.hits + l2.misses;
-    uint64_t tlb_acc = tlb.hits + tlb.misses;
+    uint64_t l1_acc  = st.l1_read_hits + st.l1_read_misses
+                     + st.l1_write_hits + st.l1_write_misses;
+    uint64_t l1_hit  = st.l1_read_hits + st.l1_write_hits;
+    uint64_t l2_acc  = st.l2_hits + st.l2_misses;
+    uint64_t tlb_acc = st.tlb_hits + st.tlb_misses;
 
     printf("\n================ RUN ================\n");
     printf("  trace %s\n", trace);
     printf("  processes %u   switch every %llu accesses   %d%% writes\n",
            nproc, (unsigned long long)quantum, WRITE_PERCENT);
     printf("  accesses %llu   reads %llu (%.1f%%)   writes %llu (%.1f%%)\n",
-           (unsigned long long)n_access,
-           (unsigned long long)n_read,  pct(n_read,  n_access),
-           (unsigned long long)n_write, pct(n_write, n_access));
+           (unsigned long long)st.accesses,
+           (unsigned long long)st.reads,  pct(st.reads,  st.accesses),
+           (unsigned long long)st.writes, pct(st.writes, st.accesses));
     printf("  context switches %llu   aging ticks %llu\n",
-           (unsigned long long)n_switch, (unsigned long long)n_ticks);
+           (unsigned long long)st.switches, (unsigned long long)st.ticks);
 
     printf("\n---------------- TLB (%d entries, PID tagged) ----------------\n", TLB_ENTRIES);
     printf("  hits %llu   misses %llu   hit rate %.2f%%   evictions %llu\n",
-           (unsigned long long)tlb.hits, (unsigned long long)tlb.misses,
-           pct(tlb.hits, tlb_acc), (unsigned long long)tlb.evictions);
+           (unsigned long long)st.tlb_hits, (unsigned long long)st.tlb_misses,
+           pct(st.tlb_hits, tlb_acc), (unsigned long long)st.tlb_evictions);
     printf("  page-table walks %llu  (one main-memory access each)\n",
-           (unsigned long long)tlb.misses);
+           (unsigned long long)st.tlb_misses);
 
     printf("\n---------------- L1 (4 KB, 16 B, 4-way, LRU) ----------------\n");
     printf("  read  hits %llu   misses %llu\n",
-           (unsigned long long)l1.read_hits, (unsigned long long)l1.read_misses);
+           (unsigned long long)st.l1_read_hits, (unsigned long long)st.l1_read_misses);
     printf("  write hits %llu   misses %llu   (no-write-allocate)\n",
-           (unsigned long long)l1.write_hits, (unsigned long long)l1.write_misses);
-    printf("  hit rate %.2f%%   block fills %llu\n", pct(l1_hit, l1_acc),
-           (unsigned long long)n_l1_fill);
+           (unsigned long long)st.l1_write_hits, (unsigned long long)st.l1_write_misses);
+    printf("  hit rate %.2f%%   evictions %llu\n",
+           pct(l1_hit, l1_acc), (unsigned long long)st.l1_evictions);
 
     printf("\n---------------- L2 (32 KB, 16 B, 8-way, FIFO) ----------------\n");
     printf("  hits %llu   misses %llu   hit rate %.2f%%\n",
-           (unsigned long long)l2.hits, (unsigned long long)l2.misses, pct(l2.hits, l2_acc));
+           (unsigned long long)st.l2_hits, (unsigned long long)st.l2_misses,
+           pct(st.l2_hits, l2_acc));
     printf("  promotions to L1 %llu   evictions %llu   (exclusive)\n",
-           (unsigned long long)l2.promotions, (unsigned long long)l2.evictions);
+           (unsigned long long)st.l2_promotions, (unsigned long long)st.l2_evictions);
     printf("  writes updating a line %llu   passing through %llu\n",
-           (unsigned long long)l2.updated_writes,
-           (unsigned long long)l2.passthrough_writes);
+           (unsigned long long)st.l2_updated_writes,
+           (unsigned long long)st.l2_passthrough_writes);
 
     printf("\n---------------- Write buffer (%d blocks, FIFO) ----------------\n", WB_ENTRIES);
     printf("  stores queued %llu   drains %llu   full stalls %llu   forwards %llu\n",
-           (unsigned long long)wb.enqueued_stores, (unsigned long long)wb.drains,
-           (unsigned long long)wb.full_stalls, (unsigned long long)wb.forwards);
+           (unsigned long long)st.wb_enqueued, (unsigned long long)st.wb_drains,
+           (unsigned long long)st.wb_stalls,   (unsigned long long)st.wb_forwards);
 
     printf("\n---------------- Main memory (32 MB, LFU+aging) ----------------\n");
     printf("  page faults %llu   disk reads %llu   writebacks %llu\n",
-           (unsigned long long)mm.page_faults, (unsigned long long)mm.disk_reads,
-           (unsigned long long)mm.disk_writebacks);
+           (unsigned long long)st.page_faults, (unsigned long long)st.disk_reads,
+           (unsigned long long)st.disk_writebacks);
     printf("  frame evictions %llu   free frames %u / %d\n",
-           (unsigned long long)mm.evictions, mm.free_count, NUM_FRAMES);
+           (unsigned long long)st.mm_evictions, mm.free_count, NUM_FRAMES);
     printf("  block fetches %llu   write arrivals %llu\n",
-           (unsigned long long)mm.block_fetches, (unsigned long long)mm.writes);
+           (unsigned long long)st.mm_block_fetches, (unsigned long long)st.mm_writes);
 
     printf("\n  per process:  pid  frames held  limits\n");
     for (uint16_t i = 0; i < nproc; i++)
         printf("                %3u  %11u  %u..%u\n", procs[i].pid,
                procs[i].frames_held, procs[i].lower_limit, procs[i].upper_limit);
 
-    if (mm.evictions == 0)
+    if (st.mm_evictions == 0)
         printf("\n  NOTE: no frame was ever evicted -- %d frames is far more than these\n"
                "        traces touch, so page replacement never came under pressure.\n"
                "        Lower PROC_UPPER_LIMIT in new_main.c to force it.\n", NUM_FRAMES);
@@ -307,7 +341,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "\nOUT OF MEMORY at access %llu: every frame is a page "
                     "table or is protected by a process's lower limit.\n",
-                    (unsigned long long)n_access);
+                    (unsigned long long)st.accesses);
             oom = 1;
             break;
         }
@@ -319,7 +353,7 @@ int main(int argc, char **argv)
             in_quantum = 0;
             if (nproc > 1) {
                 cur = (uint16_t)((cur + 1) % nproc);
-                n_switch++;
+                st.switches++;
             }
         }
     }
@@ -327,8 +361,9 @@ int main(int argc, char **argv)
     /* --- drain what the write buffer still holds ------------------------
      * Without this the last stores never reach memory. */
     while (wb_drain_head(&wb, &e)) {
-        wb.drains++;
+        st.wb_drains++;
         mm_write(&mm, WB_TO_PA(e.block_addr));
+        st.mm_writes++;
     }
 
     report(nproc, quantum, trace);

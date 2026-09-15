@@ -2,16 +2,21 @@
  *  src/mmu.c -- virtual to physical translation.  See include/mmu.h.
  * ==========================================================================*/
 
+#include <string.h>
 #include "mmu.h"
 
 int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
-             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out)
+             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out,
+             XlateInfo *info)
 {
     uint32_t vpn, off, pfn;
     PTE     *pte;
+    MMFault  fault;
 
     if (evicted_out)
         *evicted_out = MM_NO_FRAME;
+    if (info)
+        memset(info, 0, sizeof(*info));
 
     if (!tlb || !mm || !proc || !proc->pt)
         return -1;
@@ -27,6 +32,7 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
 
     /* --- TLB hit: main memory is not touched at all --------------------- */
     if (tlb_lookup(tlb, proc->pid, vpn, &pfn)) {
+        if (info) info->tlb_hit = 1;
         *pa_out = (pfn << PAGE_OFFSET_BITS) | off;
         return 0;
     }
@@ -37,8 +43,16 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
     pte = &proc->pt->entries[vpn];
 
     if (!pte->present) {
-        if (mm_handle_fault(mm, proc, (uint8_t)vpn, wb, evicted_out) != 0)
+        if (info) info->faulted = 1;
+
+        if (mm_handle_fault(mm, proc, (uint8_t)vpn, wb, evicted_out, &fault) != 0)
             return -1;                  /* out of memory */
+
+        if (info) {
+            info->disk_read  = fault.disk_read;
+            info->wrote_back = fault.wrote_back;
+            info->evicted    = fault.evicted;
+        }
 
         /* The reclaimed frame may still be named by a TLB entry.  That is the
          * dangerous one: a TLB hit skips the page table entirely and would
@@ -54,7 +68,8 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
         pte->dirty = 1;
 
     pfn = pte->frame;
-    tlb_insert(tlb, proc->pid, vpn, pfn);
+    if (tlb_insert(tlb, proc->pid, vpn, pfn) && info)
+        info->tlb_evict = 1;
 
     *pa_out = (pfn << PAGE_OFFSET_BITS) | off;
     return 0;

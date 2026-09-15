@@ -15,17 +15,6 @@ void wb_init(WriteBuffer *wb)
     memset(wb, 0, sizeof(*wb));
 }
 
-void wb_reset_stats(WriteBuffer *wb)
-{
-    if (wb == NULL)
-        return;
-
-    wb->enqueued_stores = 0;
-    wb->drains          = 0;
-    wb->full_stalls     = 0;
-    wb->forwards        = 0;
-}
-
 /* Coalescing: a store whose block is already queued merges into that entry.
  * There is nothing to write -- the entry already asserts "this block has
  * pending writes" and the hierarchy carries no data -- so the merge is the
@@ -145,9 +134,4 @@ void wb_dump(const WriteBuffer *wb)
 
     printf("  count %u/%d %s\n", (unsigned)wb->count, WB_ENTRIES,
            wb_is_full(wb) ? "[FULL]" : wb_is_empty(wb) ? "[EMPTY]" : "");
-    printf("  stores %llu | drains %llu | stalls %llu | forwards %llu\n",
-           (unsigned long long)wb->enqueued_stores,
-           (unsigned long long)wb->drains,
-           (unsigned long long)wb->full_stalls,
-           (unsigned long long)wb->forwards);
 }
