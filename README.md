@@ -19,7 +19,7 @@ Memory hierarchy simulator: TLB → L1 → L2 → main memory
 | Name                  | Modules Implemented                      | Contribution |
 | --------------------- | ---------------------------------------- | ------------ |
 | Abhinandan Jain       | L1 cache, write buffer, L1/L2 write path | 33%          |
-| Shaunak Aghor         | L2 cache, cache.c, mmuu.c                | 33%          |
+| Shaunak Aghor         | L2 cache, cache.c, mmu.c                | 33%          |
 | Christy George Joseph | main memory, page tables, TLB, driver    | 33%          |
 
 **Interaction with others outside the group:** NONE
