@@ -57,20 +57,6 @@ int wb_drain_head(WriteBuffer *wb, WBEntry *out)
     return 1;
 }
 
-int wb_flush_all(WriteBuffer *wb, void *ctx, void (*sink)(void *ctx, const WBEntry *e))
-{
-    WBEntry entry;
-    int drained = 0;
-
-    while (wb_drain_head(wb, &entry)) {
-        if (sink)
-            sink(ctx, &entry);
-        drained++;
-    }
-
-    return drained;
-}
-
 int wb_probe(const WriteBuffer *wb, uint32_t pa)
 {
     uint32_t ba;

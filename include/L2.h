@@ -51,9 +51,6 @@ void l2_age(L2Cache *l2, uint32_t index, int way);
 /* Installs pa; returns 1 if it displaced a valid line. */
 int  l2_allocate(L2Cache *l2, uint32_t pa);
 
-/* Applies a store to a resident line; returns 1 if one was updated. */
-int  l2_write_through(L2Cache *l2, uint32_t pa, uint32_t len);
-
 /* Returns an invalid way if the set has one, else the oldest in FIFO order. */
 int  l2_select_victim(L2Cache *l2, uint32_t index);
 

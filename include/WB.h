@@ -44,10 +44,6 @@ int wb_enqueue_store(WriteBuffer *wb, uint32_t pa);
 /* Removes the oldest entry into *out; returns 1, or 0 if the buffer is empty. */
 int wb_drain_head(WriteBuffer *wb, WBEntry *out);
 
-/* Drains every entry through `sink`, oldest first; returns how many. */
-int wb_flush_all(WriteBuffer *wb, void *ctx,
-                 void (*sink)(void *ctx, const WBEntry *e));
-
 /* Returns the entry holding pa's block, or WAY_NONE. */
 int wb_probe(const WriteBuffer *wb, uint32_t pa);
 
