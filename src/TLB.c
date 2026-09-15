@@ -2,18 +2,11 @@
 #include <string.h>
 #include "TLB.h"
 
-/* =====================================================================
- * LRU counter maintenance
- *
- * Ranks of the valid entries are a permutation of 0 .. (valid_count - 1),
- * with 0 = most recently used.  Making entry i the most recent means every
- * entry that was more recent than i ages by one, and i drops to 0.  Entries
- * that were already older than i keep their rank, so the permutation is
- * preserved and nothing can overflow TLB_LRU_BITS.
- *
- * A fresh fill sets lru = TLB_ENTRIES-1 first, which makes it the oldest,
- * and the same routine then promotes it -- so fill and hit share one path.
- * ===================================================================== */
+
+/*
+tlb.h is used to touch the TLB at particular index.Touching it sets lru of entry i to 0 and all entries having rank<tlb[i].rank 
+shifts one place to right and all entries with rank>tlb[i].lru keeps its rank
+*/
 static void tlb_touch(TLB *t, unsigned i)
 {
     unsigned j;
@@ -26,10 +19,10 @@ static void tlb_touch(TLB *t, unsigned i)
     t->entries[i].lru = 0;
 }
 
-/* The mirror of tlb_touch: dropping entry i would leave a hole in the
- * rank sequence, so every entry older than i closes up by one.  Without this
- * the ranks stay correctly *ordered* but stop being a permutation, and the
- * invariant the rest of the file relies on would be only half true. */
+
+/*
+Deleting an entry needs to shift all entries having lru>rank to move one place to left and invalidating entry i
+*/
 static void tlb_forget(TLB *t, unsigned i)
 {
     unsigned j;
@@ -43,6 +36,9 @@ static void tlb_forget(TLB *t, unsigned i)
             t->entries[j].lru--;
 }
 
+/* 
+this method initializes the tlb and sets lru counter of all entries to TLB_ENTRIES-1
+*/
 void tlb_init(TLB *t)
 {
     unsigned i;
@@ -52,14 +48,10 @@ void tlb_init(TLB *t)
         t->entries[i].lru = (uint32_t)(TLB_ENTRIES - 1);
 }
 
-/* ---------------------------------------------------------------------
- * Lookup
- *
- * Three conditions decide a hit and all three matter: valid rejects stale
- * leftovers, pid keeps two processes that use the same VPN apart, and vpn
- * is the page being asked for.  Dropping the pid test is what would make
- * this an ordinary TLB that has to be flushed on every context switch.
- * ------------------------------------------------------------------ */
+
+/*
+tlb_probe checks if particular vpn->pfn mapping is present.Returns -1 if search unsuccessful
+*/
 int tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn)
 {
     unsigned i;
@@ -72,6 +64,9 @@ int tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn)
     return -1;
 }
 
+/* 
+check if vpn->pfn mapping is present for a process identified by pid and if present populate pfn_out with physical frame number
+*/
 int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
 {
     int i = tlb_probe(t, pid, vpn);
@@ -83,9 +78,11 @@ int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
     return 1;
 }
 
-/* ---------------------------------------------------------------------
- * Replacement
- * ------------------------------------------------------------------ */
+
+/*
+Choose a victim for eviction. The entry that has highest value for lru counter is chosen for eviction.
+If an invalid entry is found->that entry gets selected as victim
+*/
 int tlb_select_victim(const TLB *t)
 {
     unsigned i;
@@ -104,40 +101,28 @@ int tlb_select_victim(const TLB *t)
     return victim;
 }
 
+/* This method is used to insert an new vpn->pfn mapping for a given process pid */
 int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
 {
     int displaced;
     int i;
 
-    /* A frame holds exactly one page at a time (pure paging, no sharing), so
-     * ANY other entry still claiming pfn describes a mapping that no longer
-     * exists and must go.  The eviction path already does this -- MM calls
-     * tlb_invalidate_frame() before releasing a frame -- but repeating it
-     * here makes the one-entry-per-frame invariant hold on this function's own
-     * terms instead of depending on a caller three files away.
-     *
-     * Safe to repeat: invalidating a frame that has no entries matches nothing
-     * and changes nothing, so the usual double call costs one scan.
-     *
-     * Before the probe, deliberately: the refresh path below can point an
-     * existing (pid,vpn) at a NEW frame, and that frame may still be claimed by
-     * someone else -- a duplicate that never passes through the allocate path. */
     tlb_invalidate_frame(t, pfn);
 
     i = tlb_probe(t, pid, vpn);
 
-    /* Already cached: refresh the mapping instead of creating a duplicate.
-     * This is what guarantees at most one entry per (pid, vpn) whatever
-     * order the caller uses. */
+     /*case when pid vpn combination already exists in TLB */
     if (i >= 0) {
         t->entries[i].pfn = pfn & (uint32_t)MASK(FRAME_BITS);
         tlb_touch(t, (unsigned)i);
         return 0;
     }
 
+    /* CASE when (pid,vpn) combination is not present in TLB in which case victim needs to be chosen*/
     i = tlb_select_victim(t);
     displaced = t->entries[i].valid ? 1 : 0;
 
+    /* populating alloted index i with new (pid,vpn) mapping*/
     t->entries[i].valid = 1;
     t->entries[i].pid   = pid & (uint32_t)MASK(PID_BITS);
     t->entries[i].vpn   = vpn & (uint32_t)MASK(VPN_BITS);
@@ -148,19 +133,15 @@ int tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
     return displaced;
 }
 
-/* ---------------------------------------------------------------------
- * Invalidation
- *
- * A valid TLB entry is an assertion that the page table still says the same
- * thing.  Every event that can falsify it has to reach in here, or a later
- * hit would hand out a frame the process no longer owns.
- * ------------------------------------------------------------------ */
+
+/* used to invalidate a particular (pid,vpn) entry in TLB */
 void tlb_invalidate_entry(TLB *t, uint32_t pid, uint32_t vpn)
 {
     int i = tlb_probe(t, pid, vpn);
     if (i >= 0) tlb_forget(t, (unsigned)i);
 }
 
+/* Invalidate all entries for a given pid - primarily used when process exits */
 void tlb_invalidate_pid(TLB *t, uint32_t pid)
 {
     unsigned i;
@@ -179,7 +160,7 @@ void tlb_invalidate_frame(TLB *t, uint32_t pfn)
             tlb_forget(t, i);
 }
 
-/* ------------------------------------------------------------------ */
+/*TLB dump at end of program execution*/
 void tlb_dump(const TLB *t)
 {
     unsigned i, live = 0;

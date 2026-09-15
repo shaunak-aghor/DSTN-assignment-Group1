@@ -128,7 +128,7 @@ typedef struct {
 /* Frees every frame and zeroes the process table.  Returns 0. */
 int  mm_init(MM *mm, Process *procs, uint16_t num_procs);
 
-/* Releases the frame table and frees every process's page table. */
+/* Releases the frame table. */
 void mm_destroy(MM *mm);
 
 /* Takes a free frame for (pid,vpn); returns the frame, or -1 if none is free. */
@@ -141,8 +141,7 @@ int  mm_select_victim(const MM *mm);
  * and invalidates that TLB entry so the next access is forced to walk. */
 void mm_age_tick(MM *mm, TLB *tlb);
 
-/* Gives the process a pinned page table and its two pre-paged pages.  Both
- * limits are in FRAMES and are clamped to MIN_FRAMES_PER_PROC..PAGES_PER_PROC.
+/* Gives the process a pinned page table and its two pre-paged pages.
  * Returns 0, or -1 if memory cannot seat it. */
 int  mm_create_process(MM *mm, Process *proc, uint16_t pid,
                        uint32_t lower_limit, uint32_t upper_limit);

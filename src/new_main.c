@@ -32,17 +32,23 @@
 #include "mmu.h"
 #include "cache.h"
 
-/* ---- tuning constants -- edit here and rebuild -------------------------- */
-#define WRITE_PERCENT      30                   /* 70% reads / 30% writes    */
-#define AGE_TICK_INTERVAL  1000                 /* accesses per aging pass   */
-#define WB_DRAIN_INTERVAL  10                   /* accesses per buffer drain */
-#define MAX_PROCS          20                   /* cap on the CLI argument   */
-
-/* Frames a process may hold, its page table included.  Lower the cap to put
- * main memory under pressure: at the full 256 these traces never fill the
- * 32768 frames, so no page is ever evicted and replacement never runs. */
-#define PROC_LOWER_LIMIT   MIN_FRAMES_PER_PROC  /* 3   */
-#define PROC_UPPER_LIMIT   PAGES_PER_PROC       /* 256 */
+/* ---- knobs -- override at compile time, e.g. -DPROC_UPPER_LIMIT=8 ------- */
+#ifndef WRITE_PERCENT
+#define WRITE_PERCENT      30      /* 70% reads / 30% writes                 */
+#endif
+#ifndef AGE_TICK_INTERVAL
+#define AGE_TICK_INTERVAL  1000    /* accesses between OS sampling passes    */
+#endif
+#ifndef WB_DRAIN_INTERVAL
+#define WB_DRAIN_INTERVAL  10      /* accesses between background WB drains  */
+#endif
+#ifndef PROC_UPPER_LIMIT
+#define PROC_UPPER_LIMIT   0       /* 0 = no cap (PAGES_PER_PROC frames)     */
+#endif
+#ifndef PROC_LOWER_LIMIT
+#define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC                */
+#endif
+#define MAX_PROCS          20     /* upper bound on the CLI argument        */
 
 /* ---- the machine ------------------------------------------------------- */
 static MM          mm;                  /* ~320 KB -- never a stack local */
@@ -94,7 +100,7 @@ static int do_access(Process *proc, uint32_t va, AccessType acc)
     st.accesses++;
     if (acc == ACC_WRITE) st.writes++; else st.reads++;
 
-    //virtual address to physical address
+    /* --- 1. translate --------------------------------------------------- */
     x = va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted);
     if (x & XLATE_OOM)
         return -1;
@@ -310,15 +316,19 @@ int main(int argc, char **argv)
     for (uint16_t i = 0; i < nproc; i++) {
         /* A page table plus the first two pages, per the pre-paging rule --
          * into MAIN MEMORY only, never the caches. */
-        if (mm_create_process(&mm, &procs[i], (uint16_t)(i + 1), PROC_LOWER_LIMIT, PROC_UPPER_LIMIT) != 0) 
-        {
-            printf("OUT OF MEMORY: could not seat process %u.  Too many processes for %d frames.\n", i + 1, NUM_FRAMES);
+        if (mm_create_process(&mm, &procs[i], (uint16_t)(i + 1),
+                              PROC_LOWER_LIMIT, PROC_UPPER_LIMIT) != 0) {
+            fprintf(stderr,
+                    "OUT OF MEMORY: could not seat process %u.  Too many "
+                    "processes for %d frames.\n", i + 1, NUM_FRAMES);
             fclose(fp);
             return 1;
         }
-        printf("  process %u created  (page table pinned in frame %u, pages 0-1 pre-paged)\n", procs[i].pid, procs[i].pt_frame);
+        printf("  process %u created  (page table pinned in frame %u, "
+               "pages 0-1 pre-paged)\n", procs[i].pid, procs[i].pt_frame);
     }
-    printf("trace %s, switching PID every %llu accesses\n\n", trace, (unsigned long long)quantum);
+    printf("  trace %s, switching PID every %llu accesses\n\n",
+           trace, (unsigned long long)quantum);
 
     /* --- walk the stream once, rotating the owning process -------------- */
     cur = 0;
@@ -328,9 +338,11 @@ int main(int argc, char **argv)
         uint32_t   va  = (uint32_t)strtoul(line, NULL, 16);
         AccessType acc = is_write() ? ACC_WRITE : ACC_READ;
 
-        if (do_access(&procs[cur], va, acc) != 0) 
-        {
-            printf("\nOUT OF MEMORY at access %llu: every frame is a page table or is protected by a process's lower limit.\n", (unsigned long long)st.accesses);
+        if (do_access(&procs[cur], va, acc) != 0) {
+            fprintf(stderr,
+                    "\nOUT OF MEMORY at access %llu: every frame is a page "
+                    "table or is protected by a process's lower limit.\n",
+                    (unsigned long long)st.accesses);
             oom = 1;
             break;
         }
@@ -340,8 +352,7 @@ int main(int argc, char **argv)
          * several processes coexist and none has to be flushed. */
         if (++in_quantum >= quantum) {
             in_quantum = 0;
-            if (nproc > 1) 
-            {
+            if (nproc > 1) {
                 cur = (uint16_t)((cur + 1) % nproc);
                 st.switches++;
             }
@@ -350,8 +361,7 @@ int main(int argc, char **argv)
 
     /* --- drain what the write buffer still holds ------------------------
      * Without this the last stores never reach memory. */
-    while (wb_drain_head(&wb, &e)) 
-    {
+    while (wb_drain_head(&wb, &e)) {
         st.wb_drains++;
         mm_write(&mm, WB_TO_PA(e.block_addr));
         st.mm_writes++;
@@ -359,7 +369,6 @@ int main(int argc, char **argv)
 
     report(nproc, quantum, trace);
 
-    mm_destroy(&mm);            /* frees the page tables */
     fclose(fp);
     return oom ? 1 : 0;
 }
