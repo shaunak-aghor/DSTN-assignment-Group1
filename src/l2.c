@@ -61,27 +61,34 @@ uint32_t l2_invalidate(L2Cache *l2, uint32_t pa)
 }
 
 /* Promotes a block from L2 to L1 */
-void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa)
+int l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa, int *l2_evicted)
 {
     uint32_t evicted_l1_pa = 0;
     int has_eviction = 0;
+    uint32_t index;
+    int way;
+
+    if (l2_evicted)
+        *l2_evicted = 0;
 
     // 1. Invalidate the promoted block from L2 to enforce exclusivity
     l2_invalidate(l2, pa);
-    
-    // 2. Install the promoted block into L1
+
     // 2. Extract victim from L1 safely before overwriting
-    uint32_t index = L1_INDEX(pa);
-    int way = l1_select_victim(l1, index);
+    index = L1_INDEX(pa);
+    way = l1_select_victim(l1, index);
     has_eviction = l1_evict(l1, index, way, &evicted_l1_pa);
 
     // 3. Install the promoted block into L1 safely
     l1_install(l1, pa);
 
-    // 3. Demote any evicted L1 block down to L2
+    // 4. Demote any evicted L1 block down to L2
     if (has_eviction) {
-        l2_allocate(l2, evicted_l1_pa);
+        if (l2_allocate(l2, evicted_l1_pa) && l2_evicted)
+            *l2_evicted = 1;
     }
+
+    return has_eviction;
 }
 
 /* Ages a line in L2 cache to align with FIFO */

@@ -54,17 +54,22 @@ static void *search_l2_worker(void *argument)
     return NULL; 
 }
 
-CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer, uint32_t pa)
+CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
+                             uint32_t pa, int *l1_evicted, int *l2_evicted)
 {
     pthread_t l1_thread;
     pthread_t l2_thread;
-    
+
     uint32_t search_pa = pa;
     CacheSearchResult l1_result = CACHE_MISS;
     CacheSearchResult l2_result = CACHE_MISS;
 
     sem_t start_signal;
     sem_init(&start_signal, 0, 0);
+
+    /* Nothing displaced unless the promotion below says so. */
+    if (l1_evicted) *l1_evicted = 0;
+    if (l2_evicted) *l2_evicted = 0;
 
     void *l2_arguments[4] = { l2, &search_pa, &l2_result, &start_signal };
     pthread_create(&l2_thread, NULL, search_l2_worker, l2_arguments);
@@ -87,12 +92,19 @@ CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer
     }
 
     if (l2_result == CACHE_HIT_L2) {
-        l2_promote(l2, l1, search_pa); 
+        int l2e = 0;
+        int l1e = l2_promote(l2, l1, search_pa, &l2e);
+
+        /* The promotion evicted an L1 line and demoted it into L2, exactly as
+         * the driver's own miss path does.  Pass both up so it can count them. */
+        if (l1_evicted) *l1_evicted = l1e;
+        if (l2_evicted) *l2_evicted = l2e;
+
         return CACHE_HIT_L2;
     }
 
     /* Total Cache Miss - Handled by CPU abstraction */
-    return CACHE_MISS; 
+    return CACHE_MISS;
 }
 
 /* Store path, same look-aside search as cache_read, then:

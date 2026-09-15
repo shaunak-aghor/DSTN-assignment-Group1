@@ -37,8 +37,10 @@ void l2_init(L2Cache *l2);
 /* Returns the way holding pa, or WAY_NONE. */
 int  l2_probe(L2Cache *l2, uint32_t pa);
 
-/* Moves pa's block from L2 into L1, demoting L1's victim back into L2. */
-void l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa);
+/* Moves pa's block from L2 into L1, demoting L1's victim back into L2.
+ * Returns 1 if the promotion displaced an L1 line, and sets *l2_evicted when
+ * demoting that line into L2 displaced an L2 line in turn. */
+int  l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa, int *l2_evicted);
 
 /* Invalidates pa's line; returns pa if it was present, 0 otherwise. */
 uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);

@@ -31,8 +31,4 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 clean:
 	rm -rf $(OBJ_DIR) $(EXEC)
 
-# Generate the tar.gz file for submission
-tar: clean
-	cd .. && tar -czvf group_<number>.tar.gz group_<number>
-
-.PHONY: all clean tar
+.PHONY: all clean

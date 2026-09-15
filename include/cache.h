@@ -14,9 +14,12 @@ typedef enum {
 } CacheSearchResult;
 
 /* Returns where PA was found, promoting from L2 into L1 on an L2 hit.
- * On CACHE_MISS, fetch the block and install it. */
+ * On CACHE_MISS, fetch the block and install it.
+ * An L2 hit promotes, which displaces an L1 line and demotes it into L2.
+ * *l1_evicted and *l2_evicted report those two events so the caller can count
+ * them; both are cleared on every other outcome.  Either may be NULL. */
 CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
-                             uint32_t pa);
+                             uint32_t pa, int *l1_evicted, int *l2_evicted);
 
 /* Writes pa and returns where it was found. CACHE_HIT_L1 and CACHE_HIT_WB mean
  * the store was buffered, anything else demands a write to memory.

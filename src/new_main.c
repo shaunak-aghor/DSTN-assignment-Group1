@@ -27,7 +27,7 @@
 
 #define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC */
 
-#define MAX_PROCS          20     /* upper bound on the CLI argument */
+#define MAX_PROCS          10000     /* upper bound on the CLI argument */
 
 static MM          mm;                  /* 320 KB */
 static Process     procs[MAX_PROCS];
@@ -124,11 +124,20 @@ static int do_access(Process *proc, uint32_t va, AccessType acc)
             st.mm_writes++;
         }
     } else {
-        CacheSearchResult r = cache_read(&l1, &l2, &wb, pa);
+        int l1_evicted = 0, l2_evicted = 0;
+        CacheSearchResult r = cache_read(&l1, &l2, &wb, pa,
+                                         &l1_evicted, &l2_evicted);
 
         if (r == CACHE_HIT_L1) st.l1_read_hits++; else st.l1_read_misses++;
         if (r == CACHE_HIT_WB) st.wb_forwards++;
-        if (r == CACHE_HIT_L2) { st.l2_hits++; st.l2_promotions++; }
+        if (r == CACHE_HIT_L2) {
+            st.l2_hits++;
+            st.l2_promotions++;
+            /* The promotion made room in L1 the same way the miss path below
+             * does, so the evictions it caused count the same. */
+            if (l1_evicted) st.l1_evictions++;
+            if (l2_evicted) st.l2_evictions++;
+        }
 
         if (r == CACHE_MISS) {
             /* L1 and L2 are EXCLUSIVE, so an exchange/placement must take place */
