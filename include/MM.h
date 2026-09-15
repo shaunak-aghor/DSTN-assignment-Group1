@@ -41,12 +41,17 @@
 /* No frame: what mm_handle_fault reports when it evicted nothing. */
 #define MM_NO_FRAME  ((uint32_t)-1)
 
-/* What one fault did.  The caller counts; this module keeps no statistics. */
-typedef struct {
-    unsigned disk_read  : 1;   /* a page was read in from disk            */
-    unsigned evicted    : 1;   /* a frame was reclaimed to make room      */
-    unsigned wrote_back : 1;   /* that frame was dirty and was flushed    */
-} MMFault;
+/* What one fault did, as OR-able flags.  These are NOT mutually exclusive --
+ * a single fault can read from disk, reclaim a frame and flush it -- which is
+ * why this is a flag set rather than a plain enum.  The caller counts; this
+ * module keeps no statistics. */
+typedef enum {
+    MM_OK          = 0,
+    MM_DISK_READ   = 1 << 0,   /* a page was read in from disk            */
+    MM_EVICTED     = 1 << 1,   /* a frame was reclaimed to make room      */
+    MM_WROTE_BACK  = 1 << 2,   /* that frame was dirty and was flushed    */
+    MM_OOM         = 1 << 3    /* no frame could be obtained: FAILURE     */
+} MMResult;
 
 /* ---- protection flags ---- */
 #define PROT_READ   0x1
@@ -141,11 +146,11 @@ void mm_age_tick(MM *mm, TLB *tlb);
 int  mm_create_process(MM *mm, Process *proc, uint16_t pid,
                        uint32_t lower_limit, uint32_t upper_limit);
 
-/* Makes vpn resident, evicting a frame if necessary.  Returns 0, or -1 when
- * no frame can be obtained.  Any reclaimed frame is written to *out_frame and
+/* Makes vpn resident, evicting a frame if necessary.  Returns MM_* flags;
+ * MM_OOM means it failed.  Any reclaimed frame is written to *out_frame and
  * MUST then be invalidated by the caller in the TLB, L1 and L2. */
-int  mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
-                     WriteBuffer *wb, uint32_t *out_frame, MMFault *info);
+MMResult mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
+                         WriteBuffer *wb, uint32_t *out_frame);
 
 /* Records a block fetch from memory. */
 void mm_read_block(MM *mm, uint32_t pa);

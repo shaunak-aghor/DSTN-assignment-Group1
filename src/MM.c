@@ -241,14 +241,15 @@ void mm_age_tick(MM *mm, TLB *tlb)
  *  physically tagged and would serve the previous page's bytes.
  * --------------------------------------------------------------------- */
 
-static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
-                        uint32_t *out_frame, MMFault *info)
+static MMResult evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
+                            uint32_t *out_frame)
 {
     FrameDesc *fd = &mm->frames[f];
     uint16_t   pid;
     uint8_t    vpn;
     Process   *ow;
     WBEntry    e;
+    MMResult   r = MM_OK;
     int        guard = WB_ENTRIES + 1;  /* the buffer holds at most this many */
 
     /* The write buffer is DRAINED, never discarded.  A queued store to this
@@ -287,8 +288,8 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
         PTE *pte = &ow->pt->entries[vpn];
 
         if (pte->present && pte->frame == f) {
-            if (pte->dirty && info)
-                info->wrote_back = 1;       /* flushed before reuse */
+            if (pte->dirty)
+                r |= MM_WROTE_BACK;         /* flushed to disk before reuse */
 
             pte->present    = 0;
             pte->frame      = 0;
@@ -304,9 +305,8 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
     if (out_frame)
         *out_frame = f;
 
-    if (info)
-        info->evicted = 1;
     frame_push(mm, f);
+    return r | MM_EVICTED;
 }
 
 /* ------------------------------------------------------------------------
@@ -318,26 +318,25 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb,
  *    4. otherwise                     -> global victim, evict, retry once
  * --------------------------------------------------------------------- */
 
-int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
-                    WriteBuffer *wb, uint32_t *out_frame, MMFault *info)
+MMResult mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
+                         WriteBuffer *wb, uint32_t *out_frame)
 {
-    PTE *pte;
-    int  f;
+    MMResult r = MM_OK;
+    PTE     *pte;
+    int      f;
 
     if (out_frame)
         *out_frame = MM_NO_FRAME;
-    if (info)
-        memset(info, 0, sizeof(*info));
 
     if (!mm || !proc || !proc->pt)
-        return -1;
+        return MM_OOM;
 
     pte = &proc->pt->entries[vpn];
 
     /* 1. Another path already brought it in.  Treat as success rather than
      *    allocating a second frame for the same page. */
     if (pte->present)
-        return 0;
+        return MM_OK;                   /* already resident */
 
 
     /* 2. At the cap: the process may not grow, so it displaces itself.  This
@@ -347,8 +346,8 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
     if (proc->frames_held >= proc->upper_limit) {
         int v = pick_victim(mm, (int)proc->pid);
         if (v < 0)
-            return -1;                  /* cap leaves no evictable page */
-        evict_frame(mm, (uint32_t)v, wb, out_frame, info);
+            return MM_OOM;              /* cap leaves no evictable page */
+        r |= evict_frame(mm, (uint32_t)v, wb, out_frame);
     }
 
     /* 3. A free frame. */
@@ -360,15 +359,15 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
     if (f < 0) {
         int v = mm_select_victim(mm);
         if (v < 0)
-            return -1;
-        evict_frame(mm, (uint32_t)v, wb, out_frame, info);
+            return MM_OOM;
+        r |= evict_frame(mm, (uint32_t)v, wb, out_frame);
 
         f = mm_alloc_frame(mm, proc->pid, vpn, FRAME_DATA);
         if (f < 0)
-            return -1;
+            return MM_OOM;
     }
 
-    if (info) info->disk_read = 1;      /* the page arrives from disk */
+    r |= MM_DISK_READ;                  /* the page arrives from disk */
 
     pte->present    = 1;
     pte->frame      = (uint32_t)f;
@@ -376,7 +375,7 @@ int mm_handle_fault(MM *mm, Process *proc, uint8_t vpn,
     pte->dirty      = 0;                /* fresh from disk */
     proc->frames_held++;
 
-    return 0;
+    return r;
 }
 
 /* ------------------------------------------------------------------------
@@ -436,7 +435,7 @@ int mm_create_process(MM *mm, Process *proc, uint16_t pid,
      * may already be present, in which case no fault occurred at all. */
     for (v = 0; v < 2; v++) {
         /* Frames are guaranteed free above, so these never evict. */
-        if (mm_handle_fault(mm, proc, (uint8_t)v, NULL, NULL, NULL) != 0) {
+        if (mm_handle_fault(mm, proc, (uint8_t)v, NULL, NULL) & MM_OOM) {
             free(proc->pt);
             proc->pt = NULL;
             return -1;

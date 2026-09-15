@@ -93,23 +93,24 @@ static int is_write(void)
  * ----------------------------------------------------------------------- */
 static int do_access(Process *proc, uint32_t va, AccessType acc)
 {
-    uint32_t  pa, evicted;
-    WBEntry   drained;
-    XlateInfo x;
+    uint32_t    pa, evicted;
+    WBEntry     drained;
+    XlateResult x;
 
     st.accesses++;
     if (acc == ACC_WRITE) st.writes++; else st.reads++;
 
     /* --- 1. translate --------------------------------------------------- */
-    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted, &x) != 0)
+    x = va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted);
+    if (x & XLATE_OOM)
         return -1;
 
-    if (x.tlb_hit) st.tlb_hits++; else st.tlb_misses++;
-    if (x.tlb_evict)  st.tlb_evictions++;
-    if (x.faulted)    st.page_faults++;
-    if (x.disk_read)  st.disk_reads++;
-    if (x.wrote_back) st.disk_writebacks++;
-    if (x.evicted)    st.mm_evictions++;
+    if (x & XLATE_TLB_HIT) st.tlb_hits++; else st.tlb_misses++;
+    if (x & XLATE_TLB_EVICT)  st.tlb_evictions++;
+    if (x & XLATE_FAULT)      st.page_faults++;
+    if (x & XLATE_DISK_READ)  st.disk_reads++;
+    if (x & XLATE_WROTE_BACK) st.disk_writebacks++;
+    if (x & XLATE_EVICTED)    st.mm_evictions++;
 
     /* --- 2. finish the eviction ------------------------------------------
      * L1 and L2 are PHYSICALLY tagged: lines of a reclaimed frame would serve

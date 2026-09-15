@@ -2,24 +2,21 @@
  *  src/mmu.c -- virtual to physical translation.  See include/mmu.h.
  * ==========================================================================*/
 
-#include <string.h>
 #include "mmu.h"
 
-int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
-             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out,
-             XlateInfo *info)
+XlateResult va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va,
+                     AccessType acc, WriteBuffer *wb,
+                     uint32_t *pa_out, uint32_t *evicted_out)
 {
-    uint32_t vpn, off, pfn;
-    PTE     *pte;
-    MMFault  fault;
+    XlateResult r = XLATE_OK;
+    uint32_t    vpn, off, pfn;
+    PTE        *pte;
 
     if (evicted_out)
         *evicted_out = MM_NO_FRAME;
-    if (info)
-        memset(info, 0, sizeof(*info));
 
     if (!tlb || !mm || !proc || !proc->pt)
-        return -1;
+        return XLATE_OOM;
 
     /* The virtual address space is VA_BITS wide.  Traces carry wider
      * addresses, so the low VA_BITS are kept: that preserves the page offset
@@ -32,9 +29,8 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
 
     /* --- TLB hit: main memory is not touched at all --------------------- */
     if (tlb_lookup(tlb, proc->pid, vpn, &pfn)) {
-        if (info) info->tlb_hit = 1;
         *pa_out = (pfn << PAGE_OFFSET_BITS) | off;
-        return 0;
+        return XLATE_TLB_HIT;
     }
 
     /* --- miss: the walker runs.  Page tables live in main memory and are
@@ -43,16 +39,15 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
     pte = &proc->pt->entries[vpn];
 
     if (!pte->present) {
-        if (info) info->faulted = 1;
+        MMResult f = mm_handle_fault(mm, proc, (uint8_t)vpn, wb, evicted_out);
 
-        if (mm_handle_fault(mm, proc, (uint8_t)vpn, wb, evicted_out, &fault) != 0)
-            return -1;                  /* out of memory */
+        if (f & MM_OOM)
+            return XLATE_OOM;
 
-        if (info) {
-            info->disk_read  = fault.disk_read;
-            info->wrote_back = fault.wrote_back;
-            info->evicted    = fault.evicted;
-        }
+        r |= XLATE_FAULT;
+        if (f & MM_DISK_READ)  r |= XLATE_DISK_READ;
+        if (f & MM_WROTE_BACK) r |= XLATE_WROTE_BACK;
+        if (f & MM_EVICTED)    r |= XLATE_EVICTED;
 
         /* The reclaimed frame may still be named by a TLB entry.  That is the
          * dangerous one: a TLB hit skips the page table entirely and would
@@ -68,9 +63,9 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
         pte->dirty = 1;
 
     pfn = pte->frame;
-    if (tlb_insert(tlb, proc->pid, vpn, pfn) && info)
-        info->tlb_evict = 1;
+    if (tlb_insert(tlb, proc->pid, vpn, pfn))
+        r |= XLATE_TLB_EVICT;
 
     *pa_out = (pfn << PAGE_OFFSET_BITS) | off;
-    return 0;
+    return r;
 }
