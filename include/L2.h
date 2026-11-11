@@ -10,7 +10,10 @@
  * Exclusive with L1: a block lives in L1 or L2, never both.
  *
  * Line = 14 bits: valid 1 + tag 13
- * Per set: 8x8 FIFO bit matrix (row i, bit j = 1 if way i is younger than way j)
+ * Per set: a 3-bit FIFO pointer to the next way to replace. Lines are filled
+ * in round-robin order, so the way it points at is the oldest one.
+ * (An 8x8 FIFO/LRU matrix would cost 56 bits per set; matrices only pay
+ * off for very small caches.)
  */
 
 typedef struct {
@@ -20,7 +23,7 @@ typedef struct {
 
 typedef struct {
     L2Line  ways[L2_WAYS];
-    uint8_t fifo_matrix[L2_WAYS];
+    uint8_t fifo_next;                  /* 3 bits used: 0..7, the oldest way */
 } L2Set;
 
 typedef struct {

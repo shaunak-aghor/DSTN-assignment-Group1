@@ -15,7 +15,7 @@
 typedef struct {
     uint32_t valid : 1;
     uint32_t tag   : L1_TAG_BITS;
-    uint32_t lru   : 2;                 /* 0 = most recently used */
+    uint32_t lru   : 2;                 /* 0 = least recently used, 3 = most recently used */
 } L1Line;
 
 typedef struct {

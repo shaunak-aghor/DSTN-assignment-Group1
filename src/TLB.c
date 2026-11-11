@@ -3,33 +3,34 @@
 #include "stats.h"
 
 /*
- * LRU counters: the valid entries always hold the ranks 0, 1, 2, ...
- * with 0 = most recently used and the largest rank = least recently used.
+ * LRU counters: 0 = least recently used, TLB_ENTRIES-1 = most recently used.
+ * The k valid entries always hold the top k ranks (N-k .. N-1), so when the
+ * TLB is full the ranks are exactly 0 .. N-1 and the victim is the one at 0.
  */
 
-/* Makes entry i the most recently used: everyone more recent than it ages by one. */
+/* Makes entry i the most recently used: everyone above it moves down one. */
 static void tlb_touch(TLB *t, int i)
 {
     uint32_t old_rank = t->entries[i].lru;
 
     for (int j = 0; j < TLB_ENTRIES; j++)
-        if (j != i && t->entries[j].valid && t->entries[j].lru < old_rank)
-            t->entries[j].lru++;
+        if (j != i && t->entries[j].valid && t->entries[j].lru > old_rank)
+            t->entries[j].lru--;
 
-    t->entries[i].lru = 0;
+    t->entries[i].lru = TLB_ENTRIES - 1;
 }
 
-/* Invalidates entry i and closes the gap it leaves in the ranks. */
+/* Invalidates entry i: everyone below it moves up one to close the gap. */
 static void tlb_remove(TLB *t, int i)
 {
     uint32_t old_rank = t->entries[i].lru;
 
-    t->entries[i].valid = 0;
-    t->entries[i].lru   = TLB_ENTRIES - 1;
-
     for (int j = 0; j < TLB_ENTRIES; j++)
-        if (t->entries[j].valid && t->entries[j].lru > old_rank)
-            t->entries[j].lru--;
+        if (t->entries[j].valid && t->entries[j].lru < old_rank)
+            t->entries[j].lru++;
+
+    t->entries[i].valid = 0;
+    t->entries[i].lru   = 0;
 }
 
 /* Returns the index of the entry for (pid, vpn), or -1. */
@@ -49,7 +50,7 @@ static int tlb_pick_victim(const TLB *t)
     for (int i = 0; i < TLB_ENTRIES; i++) {
         if (!t->entries[i].valid)
             return i;
-        if (t->entries[i].lru > t->entries[victim].lru)
+        if (t->entries[i].lru < t->entries[victim].lru)
             victim = i;
     }
     return victim;
@@ -57,9 +58,7 @@ static int tlb_pick_victim(const TLB *t)
 
 void tlb_init(TLB *t)
 {
-    memset(t, 0, sizeof(*t));
-    for (int i = 0; i < TLB_ENTRIES; i++)
-        t->entries[i].lru = TLB_ENTRIES - 1;
+    memset(t, 0, sizeof(*t));           /* all invalid, all ranks 0 */
 }
 
 int tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out)
@@ -99,7 +98,7 @@ void tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn)
     t->entries[i].pid   = pid;
     t->entries[i].vpn   = vpn;
     t->entries[i].pfn   = pfn;
-    t->entries[i].lru   = TLB_ENTRIES - 1;  /* enter as oldest, then promote */
+    t->entries[i].lru   = 0;            /* enter below everyone, then promote */
     tlb_touch(t, i);
 }
 

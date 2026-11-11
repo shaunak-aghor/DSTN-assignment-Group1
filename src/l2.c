@@ -25,35 +25,19 @@ void l2_invalidate(L2Cache *l2, uint32_t pa)
         l2->sets[L2_INDEX(pa)].ways[way].valid = 0;
 }
 
-/* Records `way` as the newest line: its row becomes all 1s, its column all 0s. */
-static void l2_mark_newest(L2Set *set, int way)
-{
-    set->fifo_matrix[way] = (uint8_t)(0xFF & ~(1 << way));
-    for (int i = 0; i < L2_WAYS; i++)
-        if (i != way)
-            set->fifo_matrix[i] &= (uint8_t)~(1 << way);
-}
-
-/* Returns a free way if there is one, else the oldest (fewest 1s in its row). */
+/* Returns a free way if there is one, else the oldest way (the FIFO pointer),
+ * and moves the pointer on to the next way. */
 static int l2_select_victim(L2Set *set)
 {
-    int oldest = 0, fewest = L2_WAYS;
+    int victim;
 
     for (int w = 0; w < L2_WAYS; w++)
         if (!set->ways[w].valid)
             return w;
 
-    for (int i = 0; i < L2_WAYS; i++) {
-        int younger_than = 0;
-        for (int j = 0; j < L2_WAYS; j++)
-            if (j != i && ((set->fifo_matrix[i] >> j) & 1))
-                younger_than++;
-        if (younger_than < fewest) {
-            fewest = younger_than;
-            oldest = i;
-        }
-    }
-    return oldest;
+    victim = set->fifo_next;
+    set->fifo_next = (set->fifo_next + 1) % L2_WAYS;
+    return victim;
 }
 
 void l2_allocate(L2Cache *l2, uint32_t pa)
@@ -67,7 +51,6 @@ void l2_allocate(L2Cache *l2, uint32_t pa)
 
     set->ways[way].valid = 1;
     set->ways[way].tag   = L2_TAG(pa);
-    l2_mark_newest(set, way);
 }
 
 /* L2's tag does not line up with the frame number, so rebuild each line's address and compare. */

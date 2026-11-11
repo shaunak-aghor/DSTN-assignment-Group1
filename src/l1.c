@@ -2,16 +2,14 @@
 #include "L1.h"
 
 /*
- * LRU counters: in each set the valid ways hold the ranks 0, 1, 2, 3
- * with 0 = most recently used and 3 = least recently used.
+ * LRU counters: 0 = least recently used, 3 = most recently used.
+ * The k valid ways of a set always hold the top k ranks, so in a full
+ * set the ranks are exactly 0..3 and the victim is the way at 0.
  */
 
 void l1_init(L1Cache *l1)
 {
-    memset(l1, 0, sizeof(*l1));
-    for (int s = 0; s < L1_SETS; s++)
-        for (int w = 0; w < L1_WAYS; w++)
-            l1->sets[s].ways[w].lru = L1_WAYS - 1;
+    memset(l1, 0, sizeof(*l1));         /* all invalid, all ranks 0 */
 }
 
 int l1_probe(L1Cache *l1, uint32_t pa)
@@ -25,17 +23,17 @@ int l1_probe(L1Cache *l1, uint32_t pa)
     return -1;
 }
 
-/* Makes `way` the most recently used: every way more recent than it ages by one. */
+/* Makes `way` the most recently used: every way above it moves down one. */
 void l1_age(L1Cache *l1, uint32_t index, int way)
 {
     L1Set *set = &l1->sets[index];
     uint32_t old_rank = set->ways[way].lru;
 
     for (int w = 0; w < L1_WAYS; w++)
-        if (w != way && set->ways[w].valid && set->ways[w].lru < old_rank)
-            set->ways[w].lru++;
+        if (w != way && set->ways[w].valid && set->ways[w].lru > old_rank)
+            set->ways[w].lru--;
 
-    set->ways[way].lru = 0;
+    set->ways[way].lru = L1_WAYS - 1;
 }
 
 int l1_select_victim(L1Cache *l1, uint32_t index)
@@ -46,23 +44,23 @@ int l1_select_victim(L1Cache *l1, uint32_t index)
     for (int w = 0; w < L1_WAYS; w++) {
         if (!set->ways[w].valid)
             return w;                   /* free way: nothing has to leave */
-        if (set->ways[w].lru > set->ways[victim].lru)
+        if (set->ways[w].lru < set->ways[victim].lru)
             victim = w;
     }
     return victim;
 }
 
-/* Invalidates `way` and closes the gap it leaves in the ranks. */
+/* Invalidates `way`: every way below it moves up one to close the gap. */
 static void l1_free_way(L1Set *set, int way)
 {
     uint32_t old_rank = set->ways[way].lru;
 
-    set->ways[way].valid = 0;
-    set->ways[way].lru   = L1_WAYS - 1;
-
     for (int w = 0; w < L1_WAYS; w++)
-        if (set->ways[w].valid && set->ways[w].lru > old_rank)
-            set->ways[w].lru--;
+        if (set->ways[w].valid && set->ways[w].lru < old_rank)
+            set->ways[w].lru++;
+
+    set->ways[way].valid = 0;
+    set->ways[way].lru   = 0;
 }
 
 int l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa)
@@ -85,7 +83,7 @@ void l1_install(L1Cache *l1, uint32_t pa)
 
     line->valid = 1;
     line->tag   = L1_TAG(pa);
-    line->lru   = L1_WAYS - 1;          /* enter as oldest, then promote */
+    line->lru   = 0;                    /* enter below everyone, then promote */
     l1_age(l1, index, way);
 }
 
