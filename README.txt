@@ -122,7 +122,7 @@ These are #defines at the top of src/main.c. Edit one, then run make:
   parameter               default    effect
   ----------------------  ---------  ------------------------------------------
   WRITE_PERCENT           30         share of accesses treated as stores
-  WB_DRAIN_INTERVAL       10         accesses between background WB drains
+  WB_DRAIN_INTERVAL       3          accesses between background WB drains
   AGE_TICK_INTERVAL       1000       accesses between OS aging passes
   PROC_UPPER_LIMIT        0          max data pages per process (0 = no limit)
   PROC_LOWER_LIMIT        0          min data pages per process (0 = 2)
@@ -331,12 +331,13 @@ WHAT MADE IT HARD
     tables per process, so with 32768 frames this should not happen.
     Evicting empty inner tables would fix it.
 
-3 -- The write buffer is often full with the default settings
+3 -- Write buffer drain rate is a fixed interval
 
-    Every store goes through the WB, and about 3 in 10 accesses are stores,
-    but the background drain removes only 1 entry every WB_DRAIN_INTERVAL
-    (10) accesses. So the WB is full most of the time and many stores
-    stall. Lowering WB_DRAIN_INTERVAL to 2 or 3 balances it.
+    Every store goes through the WB and about 3 in 10 accesses are stores,
+    so the background drain runs every WB_DRAIN_INTERVAL = 3 accesses to
+    keep up. With a larger interval (e.g. 10) the WB is full most of the
+    time and most stores stall. A real WB drains whenever memory is free;
+    we approximate that with this fixed interval.
 
 4 -- The simulator is slow
 

@@ -21,7 +21,7 @@
 
 #define WRITE_PERCENT      30      /* share of accesses treated as stores */
 #define AGE_TICK_INTERVAL  1000    /* accesses between OS aging passes */
-#define WB_DRAIN_INTERVAL  10      /* accesses between background WB drains */
+#define WB_DRAIN_INTERVAL  3       /* accesses between background WB drains */
 #define PROC_UPPER_LIMIT   0       /* max data pages per process, 0 = no limit */
 #define PROC_LOWER_LIMIT   0       /* min data pages per process, 0 = MIN_PAGES_PER_PROC */
 #define MAX_PROCS          10000   /* upper bound on the num_processes argument */
