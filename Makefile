@@ -1,6 +1,6 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -g -pthread -I./include
+CFLAGS = -Wall -Wextra -g -pthread -I./include -MMD -MP   # -MMD -MP: rebuild a .o when a header it uses changes
 
 # Directories
 SRC_DIR = src
@@ -26,6 +26,9 @@ $(EXEC): $(OBJS)
 # Compile source files into object files
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Header dependency files written by -MMD
+-include $(OBJS:.o=.d)
 
 # Clean up build files (useful before pushing to GitHub)
 clean:

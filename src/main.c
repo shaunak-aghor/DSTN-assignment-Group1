@@ -20,8 +20,8 @@
 #define WRITE_PERCENT      30      /* share of accesses treated as stores */
 #define AGE_TICK_INTERVAL  1000    /* accesses between OS aging passes */
 #define WB_DRAIN_INTERVAL  10      /* accesses between background WB drains */
-#define PROC_UPPER_LIMIT   0       /* max frames per process, 0 = PAGES_PER_PROC */
-#define PROC_LOWER_LIMIT   0       /* min frames per process, 0 = MIN_FRAMES_PER_PROC */
+#define PROC_UPPER_LIMIT   0       /* max data pages per process, 0 = no limit */
+#define PROC_LOWER_LIMIT   0       /* min data pages per process, 0 = MIN_PAGES_PER_PROC */
 #define MAX_PROCS          10000   /* upper bound on the num_processes argument */
 
 static MM          mm;
@@ -45,19 +45,19 @@ static int is_write(void)
 /* Runs one memory access. Returns 0, or -1 if main memory is full. */
 static int do_access(Process *proc, uint32_t va, AccessType acc)
 {
-    uint32_t pa, evicted;
+    uint32_t pa;
 
     stats.accesses++;
     if (acc == ACC_WRITE) stats.writes++; else stats.reads++;
 
     /* 1. Virtual -> physical. */
-    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted) != 0)
+    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa) != 0)
         return -1;
 
     /* 2. Caches are physically tagged: blocks of a reused frame are now stale. */
-    if (evicted != MM_NO_FRAME) {
-        l1_invalidate_frame(&l1, evicted);
-        l2_invalidate_frame(&l2, evicted);
+    for (int i = 0; i < mm.num_evicted; i++) {
+        l1_invalidate_frame(&l1, mm.evicted[i]);
+        l2_invalidate_frame(&l2, mm.evicted[i]);
     }
 
     /* 3. The cache access itself. */
@@ -107,8 +107,10 @@ static void report(uint16_t nproc, uint64_t quantum, const char *trace)
     printf("  hits %llu   misses %llu   hit rate %.2f%%   evictions %llu\n",
            (unsigned long long)stats.tlb_hits, (unsigned long long)stats.tlb_misses,
            pct(stats.tlb_hits, tlb_acc), (unsigned long long)stats.tlb_evictions);
-    printf("  page-table walks %llu  (one main-memory access each)\n",
-           (unsigned long long)stats.pt_walks);
+    printf("  page-table walks %llu  (3 levels = %llu memory reads)\n",
+           (unsigned long long)stats.pt_walks, (unsigned long long)(3 * stats.pt_walks));
+    printf("  page-table frames created %llu\n",
+           (unsigned long long)stats.pt_tables_created);
 
     printf("\n\nL1 (4 KB, 16 B, 4-way, LRU):\n");
     printf("  read  hits %llu   misses %llu\n",
@@ -141,10 +143,11 @@ static void report(uint16_t nproc, uint64_t quantum, const char *trace)
     printf("  block fetches %llu   write arrivals %llu\n",
            (unsigned long long)stats.mm_block_fetches, (unsigned long long)stats.mm_writes);
 
-    printf("\n\nper process:  pid  frames held  limits:\n");
+    printf("\n\nper process:  pid  data pages  table frames  page limits\n");
     for (uint16_t i = 0; i < nproc; i++)
-        printf("                %3u  %11u  %u..%u\n", procs[i].pid,
-               procs[i].frames_held, procs[i].lower_limit, procs[i].upper_limit);
+        printf("              %3u  %10u  %12u  %u..%u\n", procs[i].pid,
+               procs[i].pages_held, procs[i].table_frames,
+               procs[i].lower_limit, procs[i].upper_limit);
 
     if (stats.mm_evictions == 0)
         printf("\n\nNOTE: no frame was ever evicted -- %d frames is far more than these\n"
@@ -198,8 +201,8 @@ int main(int argc, char **argv)
     wb_init(&wb);
 
     for (uint16_t i = 0; i < nproc; i++) {
-        /* A page table plus the first two pages are bought once the process starts
-         * into MAIN MEMORY only, not the caches. */
+        /* The outer page table and the first two pages go into main memory
+         * (not the caches) when the process starts. */
         if (mm_create_process(&mm, &procs[i], (uint16_t)(i + 1),
                               PROC_LOWER_LIMIT, PROC_UPPER_LIMIT) != 0) {
             fprintf(stderr,
@@ -208,8 +211,8 @@ int main(int argc, char **argv)
             fclose(fp);
             return 1;
         }
-        printf("  process %u created  (page table pinned in frame %u, "
-               "pages 0-1 pre-paged)\n", procs[i].pid, procs[i].pt_frame);
+        printf("  process %u created  (outer page table in frame %u, "
+               "pages 0-1 pre-paged)\n", procs[i].pid, procs[i].root_frame);
     }
     printf("  trace %s, switching PID every %llu accesses\n\n",
            trace, (unsigned long long)quantum);

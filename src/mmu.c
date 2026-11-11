@@ -1,15 +1,16 @@
+#include <stddef.h>
 #include "mmu.h"
 #include "stats.h"
 
 int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
-             WriteBuffer *wb, uint32_t *pa_out, uint32_t *evicted_out)
+             WriteBuffer *wb, uint32_t *pa_out)
 {
     uint32_t vpn    = VA_VPN(va);
     uint32_t offset = VA_OFFSET(va);
     uint32_t pfn;
     PTE     *pte;
 
-    *evicted_out = MM_NO_FRAME;
+    mm->num_evicted = 0;
 
     /* 1. TLB hit: no memory access needed. */
     if (tlb_lookup(tlb, proc->pid, vpn, &pfn)) {
@@ -17,18 +18,22 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
         return 0;
     }
 
-    /* 2. TLB miss: walk the page table (costs one memory access). */
+    /* 2. TLB miss: walk the 3-level page table (one memory read per level). */
     stats.pt_walks++;
-    pte = &proc->pt->entries[vpn];
+    pte = mm_walk(mm, proc, vpn, wb);
+    if (pte == NULL)
+        return -1;
 
     /* 3. Page not in memory: page fault, read it from disk. */
     if (!pte->present) {
         stats.page_faults++;
-        if (mm_handle_fault(mm, proc, (uint8_t)vpn, wb, evicted_out) != 0)
+        if (mm_handle_fault(mm, proc, vpn, pte, wb) != 0)
             return -1;
-        if (*evicted_out != MM_NO_FRAME)
-            tlb_invalidate_frame(tlb, *evicted_out);
     }
+
+    /* Frames reused during the walk or fault must not be found in the TLB any more. */
+    for (int i = 0; i < mm->num_evicted; i++)
+        tlb_invalidate_frame(tlb, mm->evicted[i]);
 
     pte->referenced = 1;
     if (acc == ACC_WRITE)

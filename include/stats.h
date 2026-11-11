@@ -14,7 +14,8 @@ typedef struct {
 
     /* TLB and page table */
     uint64_t tlb_hits, tlb_misses, tlb_evictions;
-    uint64_t pt_walks;                  /* page-table walks (one per TLB miss) */
+    uint64_t pt_walks;                  /* page-table walks (one per TLB miss, 3 memory reads each) */
+    uint64_t pt_tables_created;         /* page-table frames allocated */
 
     /* L1 */
     uint64_t l1_read_hits, l1_read_misses;

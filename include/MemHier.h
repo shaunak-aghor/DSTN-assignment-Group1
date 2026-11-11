@@ -6,7 +6,7 @@
 /*
  * Sizes and bit widths for the whole simulator. Every header includes this.
  *
- * Virtual address  : 18 bits = VPN 8 + offset 10
+ * Virtual address  : 32 bits = VPN 22 (outer 6 | middle 8 | inner 8) + offset 10
  * Physical address : 27 bits = frame 17 + offset 10  (can address 128 MB)
  * Installed memory : 32 MB = 32768 frames of 1 KB    (only needs 25 bits)
  * Cache block      : 16 B
@@ -18,11 +18,14 @@
 #define BLOCK_SIZE          16
 #define PAGE_SIZE           1024
 
-/* Virtual address */
-#define VA_BITS             18
-#define VPN_BITS            8
+/* Virtual address and the 3-level page table */
+#define VA_BITS             32
 #define PAGE_OFFSET_BITS    10
-#define PAGES_PER_PROC      256         /* 2^VPN_BITS */
+#define VPN_BITS            22          /* VA_BITS - PAGE_OFFSET_BITS */
+#define OUTER_BITS          6           /* outer table:  64 entries  */
+#define MIDDLE_BITS         8           /* middle table: 256 entries */
+#define INNER_BITS          8           /* inner table:  256 entries */
+#define PT_ENTRIES          256         /* PTEs in one 1 KB frame (4 B each) */
 
 /* Physical address */
 #define PA_BITS             27
@@ -48,8 +51,9 @@
 #define TLB_ENTRIES         32
 #define PID_BITS            14
 
-/* Frames a process always keeps: 1 page table + 2 pre-paged pages */
-#define MIN_FRAMES_PER_PROC 3
+/* A new process needs 3 table frames (one per level) + 2 pre-paged pages */
+#define MIN_FRAMES_PER_PROC 5
+#define MIN_PAGES_PER_PROC  2
 
 /* MASK(n) = n ones, e.g. MASK(3) = 0b111 */
 #define MASK(n)             ((1UL << (n)) - 1UL)
@@ -57,6 +61,11 @@
 /* Virtual address -> VPN | offset */
 #define VA_VPN(va)          (((va) >> PAGE_OFFSET_BITS) & MASK(VPN_BITS))
 #define VA_OFFSET(va)       ((va) & MASK(PAGE_OFFSET_BITS))
+
+/* VPN -> index into each level of the page table */
+#define VPN_OUTER(vpn)      (((vpn) >> (MIDDLE_BITS + INNER_BITS)) & MASK(OUTER_BITS))
+#define VPN_MIDDLE(vpn)     (((vpn) >> INNER_BITS) & MASK(MIDDLE_BITS))
+#define VPN_INNER(vpn)      ((vpn) & MASK(INNER_BITS))
 
 /* Physical address -> frame number */
 #define PA_FRAME(pa)        (((pa) >> PAGE_OFFSET_BITS) & MASK(FRAME_BITS))

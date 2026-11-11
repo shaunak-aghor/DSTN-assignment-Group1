@@ -8,18 +8,18 @@
  * TLB: 32 entries, fully associative, tagged with the process ID so
  * a context switch does not need a flush.
  *
- * Entry = 45 bits: valid 1 + vpn 8 + pfn 17 + pid 14 + lru 5
+ * Entry = 59 bits: valid 1 + vpn 22 + pfn 17 + pid 14 + lru 5 (stored in 8 bytes)
  * Replacement: LRU counter per entry (0 = least recently used, 31 = most recently used).
  */
 
 #define TLB_LRU_BITS 5                  /* log2(TLB_ENTRIES) */
 
 typedef struct {
-    uint32_t valid : 1;
-    uint32_t vpn   : VPN_BITS;
-    uint32_t pfn   : FRAME_BITS;
-    uint32_t pid   : PID_BITS;
-    uint32_t lru   : TLB_LRU_BITS;   /* 0 = LRU, TLB_ENTRIES-1 = MRU */
+    uint64_t valid : 1;
+    uint64_t vpn   : VPN_BITS;
+    uint64_t pfn   : FRAME_BITS;
+    uint64_t pid   : PID_BITS;
+    uint64_t lru   : TLB_LRU_BITS;   /* 0 = LRU, TLB_ENTRIES-1 = MRU */
 } TLBEntry;
 
 typedef struct {
