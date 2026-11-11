@@ -86,13 +86,8 @@ static void evict_frame(MM *mm, uint32_t f, WriteBuffer *wb)
 {
     PTE *pte = mm->frames[f].pte;
 
-    while (wb && wb_probe_frame(wb, f) >= 0) {
-        /* The drained block lands in memory, so its page is now dirty. */
-        uint32_t df = PA_FRAME(WB_TO_PA(wb->entries[0].block_addr));
-        if (mm->frames[df].kind == FRAME_DATA)
-            mm->frames[df].pte->dirty = 1;
+    while (wb && wb_probe_frame(wb, f) >= 0)
         wb_drain_head(wb);
-    }
 
     if (pte->dirty)
         stats.disk_writebacks++;

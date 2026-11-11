@@ -1,12 +1,14 @@
-/* 
- * To run this file, do the following:
- * unzip BenchmarkTraces-20260914.zip -d traces/
- * run: make
- * run: ./sim_q3 <num_processes> <accesses_per_context_switch> <trace file>
- * by default, num_processes=5, accesses_per_context_switch=10
- * 
- *  Each trace line is a bare hex virtual address. The traces carry no
- *  read/write information, so the access type is determined by WRITE_PERCENT, set at 30%.
+/*
+ * Driver: reads the trace and runs every access through
+ * TLB -> page table -> L1/L2 (+ write buffer) -> main memory.
+ *
+ *   unzip BenchmarkTraces-20260914.zip -d traces/
+ *   make
+ *   ./sim_q3 <num_processes> <accesses_per_context_switch> <trace file>
+ *   e.g. ./sim_q3 5 10 traces/2026_27_ISEM_CC1.txt
+ *
+ * Each trace line is a bare hex virtual address. The traces carry no
+ * read/write flag, so WRITE_PERCENT% of accesses are made stores.
  */
 
 #include <stdio.h>

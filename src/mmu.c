@@ -12,8 +12,11 @@ int va_to_pa(TLB *tlb, MM *mm, Process *proc, uint32_t va, AccessType acc,
 
     mm->num_evicted = 0;
 
-    /* 1. TLB hit: no memory access needed. */
+    /* 1. TLB hit: no memory access needed. A store still marks the page
+     *    dirty, as a real TLB's dirty bit would. */
     if (tlb_lookup(tlb, proc->pid, vpn, &pfn)) {
+        if (acc == ACC_WRITE)
+            mm->frames[pfn].pte->dirty = 1;
         *pa_out = (pfn << PAGE_OFFSET_BITS) | offset;
         return 0;
     }
