@@ -22,7 +22,7 @@ typedef enum {
     FRAME_PGTBL                         /* a process's page table */
 } FrameKind;
 
-/* Page table entry = 18 bits: present 1 + frame 15 + referenced 1 + dirty 1 */
+/* Page table entry = 20 bits: present 1 + frame 17 + referenced 1 + dirty 1 */
 typedef struct {
     uint32_t present    : 1;
     uint32_t frame      : FRAME_BITS;

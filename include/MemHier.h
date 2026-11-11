@@ -7,9 +7,12 @@
  * Sizes and bit widths for the whole simulator. Every header includes this.
  *
  * Virtual address  : 18 bits = VPN 8 + offset 10
- * Physical address : 25 bits = frame 15 + offset 10
- * Page / frame     : 1 KB  -> 32768 frames in 32 MB
+ * Physical address : 27 bits = frame 17 + offset 10  (can address 128 MB)
+ * Installed memory : 32 MB = 32768 frames of 1 KB    (only needs 25 bits)
  * Cache block      : 16 B
+ *
+ * The PA is 2 bits wider than the installed memory so memory can grow
+ * later without changing any address format, cache tag or page table.
  */
 
 #define BLOCK_SIZE          16
@@ -22,23 +25,23 @@
 #define PAGES_PER_PROC      256         /* 2^VPN_BITS */
 
 /* Physical address */
-#define PA_BITS             25
-#define FRAME_BITS          15
-#define NUM_FRAMES          32768       /* 2^FRAME_BITS */
+#define PA_BITS             27
+#define FRAME_BITS          17          /* PA_BITS - PAGE_OFFSET_BITS */
+#define NUM_FRAMES          32768       /* frames actually installed (32 MB) */
 
 /* L1: 4 KB, 16 B block, 4-way, LRU */
 #define L1_SETS             64
 #define L1_WAYS             4
-#define L1_TAG_BITS         15
 #define L1_INDEX_BITS       6
 #define L1_OFFSET_BITS      4
+#define L1_TAG_BITS         (PA_BITS - L1_INDEX_BITS - L1_OFFSET_BITS)   /* 17 */
 
 /* L2: 32 KB, 16 B block, 8-way, FIFO */
 #define L2_SETS             256
 #define L2_WAYS             8
-#define L2_TAG_BITS         13
 #define L2_INDEX_BITS       8
 #define L2_OFFSET_BITS      4
+#define L2_TAG_BITS         (PA_BITS - L2_INDEX_BITS - L2_OFFSET_BITS)   /* 15 */
 
 /* Write buffer and TLB */
 #define WB_ENTRIES          4

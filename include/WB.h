@@ -10,7 +10,7 @@
  * drains to memory later. A store to a block already queued is merged
  * into that entry (coalescing) instead of taking a new slot.
  *
- * Entry = 22 bits: valid 1 + block address 21 (the PA without its 4 offset bits)
+ * Entry = 24 bits: valid 1 + block address 23 (the PA without its 4 offset bits)
  * Slot 0 is always the oldest entry.
  */
 

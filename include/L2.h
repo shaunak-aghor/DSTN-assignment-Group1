@@ -9,7 +9,7 @@
  * Write-through (every write also goes to memory), FIFO replacement.
  * Exclusive with L1: a block lives in L1 or L2, never both.
  *
- * Line = 14 bits: valid 1 + tag 13
+ * Line = 16 bits: valid 1 + tag 15
  * Per set: a 3-bit FIFO pointer to the next way to replace. Lines are filled
  * in round-robin order, so the way it points at is the oldest one.
  * (An 8x8 FIFO/LRU matrix would cost 56 bits per set; matrices only pay

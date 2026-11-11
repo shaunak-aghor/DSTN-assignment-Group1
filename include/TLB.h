@@ -8,7 +8,7 @@
  * TLB: 32 entries, fully associative, tagged with the process ID so
  * a context switch does not need a flush.
  *
- * Entry = 43 bits: valid 1 + vpn 8 + pfn 15 + pid 14 + lru 5
+ * Entry = 45 bits: valid 1 + vpn 8 + pfn 17 + pid 14 + lru 5
  * Replacement: LRU counter per entry (0 = least recently used, 31 = most recently used).
  */
 

@@ -9,7 +9,7 @@
  * Write-through + no-write-allocate (so no dirty bit), LRU replacement.
  * We only track tags, there is no data stored anywhere.
  *
- * Line = 18 bits: valid 1 + tag 15 + lru 2
+ * Line = 20 bits: valid 1 + tag 17 + lru 2
  */
 
 typedef struct {
