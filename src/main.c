@@ -11,60 +11,30 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "MM.h"
 #include "mmu.h"
 #include "cache.h"
+#include "stats.h"
 
-#define WRITE_PERCENT      30      
-
-#define AGE_TICK_INTERVAL  1000    /* accesses between OS sampling passes */
-
+#define WRITE_PERCENT      30      /* share of accesses treated as stores */
+#define AGE_TICK_INTERVAL  1000    /* accesses between OS aging passes */
 #define WB_DRAIN_INTERVAL  10      /* accesses between background WB drains */
+#define PROC_UPPER_LIMIT   0       /* max frames per process, 0 = PAGES_PER_PROC */
+#define PROC_LOWER_LIMIT   0       /* min frames per process, 0 = MIN_FRAMES_PER_PROC */
+#define MAX_PROCS          10000   /* upper bound on the num_processes argument */
 
-#define PROC_UPPER_LIMIT   0       /* 0 = no cap (PAGES_PER_PROC frames) */
-
-#define PROC_LOWER_LIMIT   0       /* 0 = MIN_FRAMES_PER_PROC */
-
-#define MAX_PROCS          10000     /* upper bound on the CLI argument */
-
-static MM          mm;                  /* 320 KB */
+static MM          mm;
 static Process     procs[MAX_PROCS];
 static TLB         tlb;
 static L1Cache     l1;
 static L2Cache     l2;
 static WriteBuffer wb;
 
-/* Statistics:
- * Every counter lives here.  No module keeps statistics of its own: they
- * report what happened through return values, and the driver decides what is
- * worth counting. 
- */
-static struct {
-    /* main */
-    uint64_t accesses, reads, writes, switches, ticks;
+Stats stats;
 
-    /* tlb */
-    uint64_t tlb_hits, tlb_misses, tlb_evictions;
-
-    /* l1 */
-    uint64_t l1_read_hits, l1_read_misses;
-    uint64_t l1_write_hits, l1_write_misses, l1_evictions;
-
-    /* l2 */
-    uint64_t l2_hits, l2_misses, l2_promotions, l2_evictions;
-    uint64_t l2_updated_writes, l2_passthrough_writes;
-
-    /* wb */
-    uint64_t wb_enqueued, wb_drains, wb_stalls, wb_forwards;
-
-    /* mm */
-    uint64_t page_faults, disk_reads, disk_writebacks, mm_evictions;
-    uint64_t mm_writes, mm_block_fetches;
-} st;
-
-/* Deterministic random number generator */
+/* The traces have no read/write flag, so a seeded random generator makes
+ * WRITE_PERCENT% of accesses stores. Same seed = same run every time. */
 static uint32_t rng = 12345u;
 static int is_write(void)
 {
@@ -72,109 +42,38 @@ static int is_write(void)
     return (int)((rng >> 16) % 100u) < WRITE_PERCENT;
 }
 
-/* One access. Returns 0, or -1 when main memory is exhausted. */
+/* Runs one memory access. Returns 0, or -1 if main memory is full. */
 static int do_access(Process *proc, uint32_t va, AccessType acc)
 {
-    uint32_t    pa, evicted;
-    WBEntry     drained;
-    XlateResult x;
+    uint32_t pa, evicted;
 
-    st.accesses++;
-    if (acc == ACC_WRITE) st.writes++; else st.reads++;
+    stats.accesses++;
+    if (acc == ACC_WRITE) stats.writes++; else stats.reads++;
 
-    /* translation for va to pa */
-    x = va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted);
-    if (x & XLATE_OOM) {
+    /* 1. Virtual -> physical. */
+    if (va_to_pa(&tlb, &mm, proc, va, acc, &wb, &pa, &evicted) != 0)
         return -1;
-    }
 
-    /* stat checks */
-    if (x & XLATE_TLB_HIT) st.tlb_hits++; else st.tlb_misses++;
-    if (x & XLATE_TLB_EVICT)  st.tlb_evictions++;
-    if (x & XLATE_FAULT)      st.page_faults++;
-    if (x & XLATE_DISK_READ)  st.disk_reads++;
-    if (x & XLATE_WROTE_BACK) st.disk_writebacks++;
-    if (x & XLATE_EVICTED)    st.mm_evictions++;
-
-    /* Eviction of a frame. */
+    /* 2. Caches are physically tagged: blocks of a reused frame are now stale. */
     if (evicted != MM_NO_FRAME) {
         l1_invalidate_frame(&l1, evicted);
         l2_invalidate_frame(&l2, evicted);
     }
 
-    /* Access */
-    if (acc == ACC_WRITE) {
-        CacheSearchResult r = cache_write(&l1, &l2, &wb, pa, &drained);
+    /* 3. The cache access itself. */
+    if (acc == ACC_WRITE)
+        cache_write(&l1, &l2, &wb, pa);
+    else
+        cache_read(&l1, &l2, &wb, pa);
 
-        if (r == CACHE_HIT_L1) st.l1_write_hits++; else st.l1_write_misses++;
+    /* 4. Background work. */
+    if (stats.accesses % WB_DRAIN_INTERVAL == 0)
+        wb_drain_head(&wb);
 
-        if (r == CACHE_HIT_L1 || r == CACHE_HIT_WB) {
-            st.wb_enqueued++;                 /* the store was buffered */
-            if (drained.valid) {              /* it arrived at a full buffer->drain cycle */
-                st.wb_stalls++;
-                st.wb_drains++;
-                mm_write(&mm, WB_TO_PA(drained.block_addr));
-                st.mm_writes++;
-            }
-        } else {
-            /* L2->mm, the CPU stalls.(write through policy) */
-            if (r == CACHE_HIT_L2) { st.l2_hits++;   st.l2_updated_writes++; }
-            else                   { st.l2_misses++; st.l2_passthrough_writes++; }
-            mm_write(&mm, pa);
-            st.mm_writes++;
-        }
-    } else {
-        int l1_evicted = 0, l2_evicted = 0;
-        CacheSearchResult r = cache_read(&l1, &l2, &wb, pa,
-                                         &l1_evicted, &l2_evicted);
-
-        if (r == CACHE_HIT_L1) st.l1_read_hits++; else st.l1_read_misses++;
-        if (r == CACHE_HIT_WB) st.wb_forwards++;
-        if (r == CACHE_HIT_L2) {
-            st.l2_hits++;
-            st.l2_promotions++;
-            /* The promotion made room in L1 the same way the miss path below
-             * does, so the evictions it caused count the same. */
-            if (l1_evicted) st.l1_evictions++;
-            if (l2_evicted) st.l2_evictions++;
-        }
-
-        if (r == CACHE_MISS) {
-            /* L1 and L2 are EXCLUSIVE, so an exchange/placement must take place */
-            uint32_t idx = (uint32_t)L1_INDEX(pa);
-            int      way = l1_select_victim(&l1, idx); // selects victim way in L1
-            uint32_t victim_pa = 0;
-            int      displaced = l1_evict(&l1, idx, way, &victim_pa);
-
-            st.l2_misses++; // Stat counter for L2 miss
-            mm_read_block(&mm, pa);
-            st.mm_block_fetches++;
-
-            l1_install(&l1, pa); // Adds the L2 block to L1 cache
-            if (displaced) {
-                st.l1_evictions++;
-                if (l2_allocate(&l2, victim_pa)) // Adds the evicted L1 block to L2 cache
-                    st.l2_evictions++;
-            }
-        }
-    }
-
-    /* Starts Write Buffer draining */
-    if (st.accesses % WB_DRAIN_INTERVAL == 0) {
-        WBEntry bg;
-        if (wb_drain_head(&wb, &bg)) {
-            st.wb_drains++;
-            mm_write(&mm, WB_TO_PA(bg.block_addr));
-            st.mm_writes++;
-        }
-    }
-
-    /* OS sampling*/
-    if (st.accesses % AGE_TICK_INTERVAL == 0) {
+    if (stats.accesses % AGE_TICK_INTERVAL == 0) {
         mm_age_tick(&mm, &tlb);
-        st.ticks++;
+        stats.ticks++;
     }
-
     return 0;
 }
 
@@ -187,71 +86,70 @@ static double pct(uint64_t part, uint64_t whole)
 /* Reporting the current statistics for debugging and checking purposes */
 static void report(uint16_t nproc, uint64_t quantum, const char *trace)
 {
-    uint64_t l1_acc  = st.l1_read_hits + st.l1_read_misses
-                     + st.l1_write_hits + st.l1_write_misses;
-    uint64_t l1_hit  = st.l1_read_hits + st.l1_write_hits;
-    uint64_t l2_acc  = st.l2_hits + st.l2_misses;
-    uint64_t tlb_acc = st.tlb_hits + st.tlb_misses;
+    uint64_t l1_acc  = stats.l1_read_hits + stats.l1_read_misses
+                     + stats.l1_write_hits + stats.l1_write_misses;
+    uint64_t l1_hit  = stats.l1_read_hits + stats.l1_write_hits;
+    uint64_t l2_acc  = stats.l2_hits + stats.l2_misses;
+    uint64_t tlb_acc = stats.tlb_hits + stats.tlb_misses;
 
     printf("\n================ RUN ================\n");
     printf("  trace %s\n", trace);
     printf("  processes %u   switch every %llu accesses   %d%% writes\n",
            nproc, (unsigned long long)quantum, WRITE_PERCENT);
     printf("  accesses %llu   reads %llu (%.1f%%)   writes %llu (%.1f%%)\n",
-           (unsigned long long)st.accesses,
-           (unsigned long long)st.reads,  pct(st.reads,  st.accesses),
-           (unsigned long long)st.writes, pct(st.writes, st.accesses));
+           (unsigned long long)stats.accesses,
+           (unsigned long long)stats.reads,  pct(stats.reads,  stats.accesses),
+           (unsigned long long)stats.writes, pct(stats.writes, stats.accesses));
     printf("  context switches %llu   aging ticks %llu\n",
-           (unsigned long long)st.switches, (unsigned long long)st.ticks);
+           (unsigned long long)stats.switches, (unsigned long long)stats.ticks);
 
     printf("\n\nTLB (%d entries, PID tagged):\n", TLB_ENTRIES);
     printf("  hits %llu   misses %llu   hit rate %.2f%%   evictions %llu\n",
-           (unsigned long long)st.tlb_hits, (unsigned long long)st.tlb_misses,
-           pct(st.tlb_hits, tlb_acc), (unsigned long long)st.tlb_evictions);
+           (unsigned long long)stats.tlb_hits, (unsigned long long)stats.tlb_misses,
+           pct(stats.tlb_hits, tlb_acc), (unsigned long long)stats.tlb_evictions);
     printf("  page-table walks %llu  (one main-memory access each)\n",
-           (unsigned long long)st.tlb_misses);
+           (unsigned long long)stats.pt_walks);
 
     printf("\n\nL1 (4 KB, 16 B, 4-way, LRU):\n");
     printf("  read  hits %llu   misses %llu\n",
-           (unsigned long long)st.l1_read_hits, (unsigned long long)st.l1_read_misses);
+           (unsigned long long)stats.l1_read_hits, (unsigned long long)stats.l1_read_misses);
     printf("  write hits %llu   misses %llu   (no-write-allocate)\n",
-           (unsigned long long)st.l1_write_hits, (unsigned long long)st.l1_write_misses);
+           (unsigned long long)stats.l1_write_hits, (unsigned long long)stats.l1_write_misses);
     printf("  hit rate %.2f%%   evictions %llu\n",
-           pct(l1_hit, l1_acc), (unsigned long long)st.l1_evictions);
+           pct(l1_hit, l1_acc), (unsigned long long)stats.l1_evictions);
 
     printf("\n\nL2 (32 KB, 16 B, 8-way, FIFO):\n");
     printf("  hits %llu   misses %llu   hit rate %.2f%%\n",
-           (unsigned long long)st.l2_hits, (unsigned long long)st.l2_misses,
-           pct(st.l2_hits, l2_acc));
+           (unsigned long long)stats.l2_hits, (unsigned long long)stats.l2_misses,
+           pct(stats.l2_hits, l2_acc));
     printf("  promotions to L1 %llu   evictions %llu   (exclusive)\n",
-           (unsigned long long)st.l2_promotions, (unsigned long long)st.l2_evictions);
+           (unsigned long long)stats.l2_promotions, (unsigned long long)stats.l2_evictions);
     printf("  writes updating a line %llu   passing through %llu\n",
-           (unsigned long long)st.l2_updated_writes,
-           (unsigned long long)st.l2_passthrough_writes);
+           (unsigned long long)stats.l2_updated_writes,
+           (unsigned long long)stats.l2_passthrough_writes);
 
     printf("\n\nWrite buffer (%d blocks, FIFO):\n", WB_ENTRIES);
     printf("  stores queued %llu   drains %llu   full stalls %llu   forwards %llu\n",
-           (unsigned long long)st.wb_enqueued, (unsigned long long)st.wb_drains,
-           (unsigned long long)st.wb_stalls,   (unsigned long long)st.wb_forwards);
+           (unsigned long long)stats.wb_enqueued, (unsigned long long)stats.wb_drains,
+           (unsigned long long)stats.wb_stalls,   (unsigned long long)stats.wb_forwards);
 
     printf("\n\nMain memory (32 MB, LFU+aging):\n");
-    printf("  page faults %llu   disk reads %llu   writebacks %llu\n",
-           (unsigned long long)st.page_faults, (unsigned long long)st.disk_reads,
-           (unsigned long long)st.disk_writebacks);
+    printf("  page faults (disk reads) %llu   writebacks %llu\n",
+           (unsigned long long)stats.page_faults, (unsigned long long)stats.disk_writebacks);
     printf("  frame evictions %llu   free frames %u / %d\n",
-           (unsigned long long)st.mm_evictions, mm.free_count, NUM_FRAMES);
+           (unsigned long long)stats.mm_evictions, mm.free_count, NUM_FRAMES);
     printf("  block fetches %llu   write arrivals %llu\n",
-           (unsigned long long)st.mm_block_fetches, (unsigned long long)st.mm_writes);
+           (unsigned long long)stats.mm_block_fetches, (unsigned long long)stats.mm_writes);
 
     printf("\n\nper process:  pid  frames held  limits:\n");
     for (uint16_t i = 0; i < nproc; i++)
         printf("                %3u  %11u  %u..%u\n", procs[i].pid,
                procs[i].frames_held, procs[i].lower_limit, procs[i].upper_limit);
 
-    if (st.mm_evictions == 0)
+    if (stats.mm_evictions == 0)
         printf("\n\nNOTE: no frame was ever evicted -- %d frames is far more than these\n"
                "  traces touch, so page replacement was never done.\n"
-               "  you can lower PROC_UPPER_LIMIT in new_main.c to force it.\n", NUM_FRAMES);
+               "  you can lower PROC_UPPER_LIMIT in main.c to force it.\n", NUM_FRAMES);
     printf("=====================================\n");
 }
 
@@ -264,7 +162,6 @@ int main(int argc, char **argv)
     uint64_t    quantum, in_quantum;
     int         oom = 0;
     char        line[64];
-    WBEntry     e;
 
     if (argc != 4) {
         fprintf(stderr,
@@ -329,7 +226,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "\nOUT OF MEMORY at access %llu: every frame is a page "
                     "table or is protected by a process's lower limit.\n",
-                    (unsigned long long)st.accesses);
+                    (unsigned long long)stats.accesses);
             oom = 1;
             break;
         }
@@ -342,7 +239,7 @@ int main(int argc, char **argv)
             in_quantum = 0;
             if (nproc > 1) {
                 cur = (uint16_t)((cur + 1) % nproc);
-                st.switches++;
+                stats.switches++;
             }
         }
     }
@@ -351,11 +248,8 @@ int main(int argc, char **argv)
      * Drain what the write buffer still holds.
      * Without this the last stores never reach memory. 
      */
-    while (wb_drain_head(&wb, &e)) {
-        st.wb_drains++;
-        mm_write(&mm, WB_TO_PA(e.block_addr));
-        st.mm_writes++;
-    }
+    while (wb_drain_head(&wb))
+        ;
 
     report(nproc, quantum, trace); // Outputs
 

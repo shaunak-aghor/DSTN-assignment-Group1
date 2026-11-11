@@ -6,6 +6,11 @@
 #include "L2.h"
 #include "WB.h"
 
+/*
+ * The cache side of one access. L1 and L2 are searched at the same time
+ * on two threads (look-aside), then the result is applied here.
+ */
+
 typedef enum {
     CACHE_MISS = 0,
     CACHE_HIT_L1,
@@ -13,18 +18,10 @@ typedef enum {
     CACHE_HIT_L2
 } CacheSearchResult;
 
-/* Returns where PA was found, promoting from L2 into L1 on an L2 hit.
- * On CACHE_MISS, fetch the block and install it.
- * An L2 hit promotes, which displaces an L1 line and demotes it into L2.
- * *l1_evicted and *l2_evicted report those two events so the caller can count
- * them; both are cleared on every other outcome.  Either may be NULL. */
-CacheSearchResult cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
-                             uint32_t pa, int *l1_evicted, int *l2_evicted);
+/* Reads the block at physical address pa, moving it into L1 if it is not there. */
+void cache_read(L1Cache *l1, L2Cache *l2, WriteBuffer *wb, uint32_t pa);
 
-/* Writes pa and returns where it was found. CACHE_HIT_L1 and CACHE_HIT_WB mean
- * the store was buffered, anything else demands a write to memory.
- * A displaced buffer entry is returned through *drained_out. */
-CacheSearchResult cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *write_buffer,
-                              uint32_t pa, WBEntry *drained_out);
+/* Writes to physical address pa (write-through, no-write-allocate). */
+void cache_write(L1Cache *l1, L2Cache *l2, WriteBuffer *wb, uint32_t pa);
 
 #endif

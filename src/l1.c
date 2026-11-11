@@ -1,204 +1,99 @@
-#include "L1.h"
-#include <stddef.h>
 #include <string.h>
+#include "L1.h"
+
+/*
+ * LRU counters: in each set the valid ways hold the ranks 0, 1, 2, 3
+ * with 0 = most recently used and 3 = least recently used.
+ */
 
 void l1_init(L1Cache *l1)
 {
-    if (l1 == NULL){
-        /* Error case */
-        return;
-    }
-
     memset(l1, 0, sizeof(*l1));
-
-    for (uint32_t s = 0; s < L1_SETS; s++){
-        for (int j = 0; j < L1_WAYS; j++){
-            l1->sets[s].ways[j].lru = L1_WAYS - 1;
-            /* setting everything to INVALID and LRU(just in case, mostly not needed) */
-            l1->sets[s].ways[j].valid = 0;
-        }
-    }
+    for (int s = 0; s < L1_SETS; s++)
+        for (int w = 0; w < L1_WAYS; w++)
+            l1->sets[s].ways[w].lru = L1_WAYS - 1;
 }
 
 int l1_probe(L1Cache *l1, uint32_t pa)
 {
-    uint32_t index;
-    uint32_t tag;
-    int way;
+    L1Set *set = &l1->sets[L1_INDEX(pa)];
+    uint32_t tag = L1_TAG(pa);
 
-    if (l1 == NULL)
-        return -1;
-
-    index = L1_INDEX(pa);
-    tag = L1_TAG(pa);
-
-    for (way = 0; way < L1_WAYS; way++) {
-        L1Line *line = &l1->sets[index].ways[way];
-
-        if (line->valid && line->tag == tag) {
-            return way;
-        }
-    }
-
+    for (int w = 0; w < L1_WAYS; w++)
+        if (set->ways[w].valid && set->ways[w].tag == tag)
+            return w;
     return -1;
 }
 
-/* The maximum rank value is the number of ranks, L1_WAYS-1.  On a hit the
- * ways ranked below the touched one are incremented and it drops to 0.
- * Invalid ways are neither promoted nor demoted, they are left the same. */
+/* Makes `way` the most recently used: every way more recent than it ages by one. */
 void l1_age(L1Cache *l1, uint32_t index, int way)
 {
-    L1Set   *set;
-    uint32_t rank;
+    L1Set *set = &l1->sets[index];
+    uint32_t old_rank = set->ways[way].lru;
 
-    if (l1 == NULL || index >= L1_SETS || way < 0 || way >= L1_WAYS)
-        return;
-
-    set  = &l1->sets[index];
-    rank = set->ways[way].lru;
-
-    for (int j = 0; j < L1_WAYS; j++)
-        if (j != way && set->ways[j].valid && set->ways[j].lru < rank)
-            set->ways[j].lru++;
+    for (int w = 0; w < L1_WAYS; w++)
+        if (w != way && set->ways[w].valid && set->ways[w].lru < old_rank)
+            set->ways[w].lru++;
 
     set->ways[way].lru = 0;
 }
 
-/* Checks for invalid first, if found, then it returns the index, else it
- * returns the LRU way. -1 means error, case handling will be done elsewhere. */
-int l1_select_victim(L1Cache *l1, uint32_t index){
-    L1Set *set;
-    int way = 0;
+int l1_select_victim(L1Cache *l1, uint32_t index)
+{
+    L1Set *set = &l1->sets[index];
+    int victim = 0;
 
-    if (l1 == NULL || index >= L1_SETS){
-        /* not possible, is an error*/
-        return -1;
+    for (int w = 0; w < L1_WAYS; w++) {
+        if (!set->ways[w].valid)
+            return w;                   /* free way: nothing has to leave */
+        if (set->ways[w].lru > set->ways[victim].lru)
+            victim = w;
     }
-
-    set = &l1->sets[index];
-
-    for(int j = 0; j < L1_WAYS; j++){
-        if(!set->ways[j].valid){
-            /* found an invalid way, return it */
-            return j;
-        }
-        if(set->ways[j].lru > set->ways[way].lru){
-            way = j;
-            /* found an LRU way, but don't return, wait for validity checks */
-        }
-    }
-    return way;
+    return victim;
 }
 
-/* Frees a way and closes the rank it vacated, so the surviving ranks stay
- * dense.  Without the closing loop a mid-range gap survives the next install
- * and two ways end up sharing a rank. */
+/* Invalidates `way` and closes the gap it leaves in the ranks. */
 static void l1_free_way(L1Set *set, int way)
 {
-    uint32_t rank = set->ways[way].lru;
+    uint32_t old_rank = set->ways[way].lru;
 
     set->ways[way].valid = 0;
     set->ways[way].lru   = L1_WAYS - 1;
 
-    for (int j = 0; j < L1_WAYS; j++)
-        if (set->ways[j].valid && set->ways[j].lru > rank)
-            set->ways[j].lru--;
+    for (int w = 0; w < L1_WAYS; w++)
+        if (set->ways[w].valid && set->ways[w].lru > old_rank)
+            set->ways[w].lru--;
 }
 
-/* Hands the victim's block base back through out_pa and frees the way.
- * Returns 1 if a line was evicted, 0 if the way was already free. */
 int l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa)
 {
-    L1Set  *set;
-    L1Line *line;
-
-    if (l1 == NULL || index >= L1_SETS || way < 0 || way >= L1_WAYS)
-        return 0;
-
-    set  = &l1->sets[index];
-    line = &set->ways[way];
+    L1Line *line = &l1->sets[index].ways[way];
 
     if (!line->valid)
         return 0;
 
-    if (out_pa)
-        *out_pa = L1_MAKE_PA(line->tag, index);
-
-    l1_free_way(set, way);
+    *out_pa = L1_MAKE_PA(line->tag, index);
+    l1_free_way(&l1->sets[index], way);
     return 1;
 }
 
-/* Installs pa into its set.  Call after l1_evict has freed a way, which is
- * what makes the placement case the normal one.
- *   -1  nothing installed : NULL cache, or l1_select_victim failed
- *    0  placement         : The chosen way was free
- *    1  replacement       : The chosen way held a valid line, now overwritten
- */
-int l1_install(L1Cache *l1, uint32_t pa)
+void l1_install(L1Cache *l1, uint32_t pa)
 {
-    uint32_t index;
-    int      way;
-    int      replaced;
-    L1Line  *line;
-
-    if (l1 == NULL)
-        return -1;
-
-    index = L1_INDEX(pa);
-    way   = l1_select_victim(l1, index);
-
-    if (way < 0)
-        return -1;
-
-    line     = &l1->sets[index].ways[way];
-    replaced = line->valid ? 1 : 0;
+    uint32_t index = L1_INDEX(pa);
+    int way = l1_select_victim(l1, index);
+    L1Line *line = &l1->sets[index].ways[way];
 
     line->valid = 1;
     line->tag   = L1_TAG(pa);
-
-    line->lru = L1_WAYS - 1;    /* enter as oldest, then promote */
-    l1_age(l1, index, way);
-
-    return replaced;
-}
-
-/* A store that hit in L1. With no data to patch and no dirty bit, all this
- * does is promote the line, the store itself reaches memory through the
- * write buffer, which main enqueues. */
-void l1_write_hit(L1Cache *l1, uint32_t pa, int way)
-{
-    uint32_t index;
-    L1Line  *line;
-
-    if (l1 == NULL || way < 0 || way >= L1_WAYS)
-        return;
-
-    index = L1_INDEX(pa);       /* masked to 6 bits, always a valid set */
-    line  = &l1->sets[index].ways[way];
-
-    if (!line->valid || line->tag != L1_TAG(pa))
-        return;                 /* not a hit -- the caller must probe first */
-
+    line->lru   = L1_WAYS - 1;          /* enter as oldest, then promote */
     l1_age(l1, index, way);
 }
-/* Invalidates all lines in the L1 cache that belong to a specific frame. */
-int l1_invalidate_frame(L1Cache *l1, uint32_t frame)
+
+/* L1's index + offset is exactly the 10-bit page offset, so the L1 tag IS the frame number. */
+void l1_invalidate_frame(L1Cache *l1, uint32_t frame)
 {
-    uint32_t tag = frame & (uint32_t)MASK(L1_TAG_BITS);
-    int      dropped = 0;
-
-    if (l1 == NULL)
-        return 0;
-
-    for (uint32_t s = 0; s < L1_SETS; s++)
-        for (int w = 0; w < L1_WAYS; w++) {
-            L1Line *line = &l1->sets[s].ways[w];
-
-            if (line->valid && line->tag == tag) {
-                l1_free_way(&l1->sets[s], w);   /* frees and closes the rank gap */
-                dropped++;
-            }
-        }
-
-    return dropped;
+    for (int s = 0; s < L1_SETS; s++)
+        for (int w = 0; w < L1_WAYS; w++)
+            if (l1->sets[s].ways[w].valid && l1->sets[s].ways[w].tag == frame)
+                l1_free_way(&l1->sets[s], w);
 }

@@ -4,15 +4,18 @@
 #include <stdint.h>
 #include "MemHier.h"
 
-/*Line layout = 18 bits = valid 1 + tag 15 + LRU 2(4 ways)
- *The hierarchy tracks tags only, there is no data payload anywhere.
- *Uses no-write-allocate, no dirty bit, replacement using LRU.
+/*
+ * L1 cache: 4 KB, 16 B blocks, 4-way set associative, 64 sets.
+ * Write-through + no-write-allocate (so no dirty bit), LRU replacement.
+ * We only track tags, there is no data stored anywhere.
+ *
+ * Line = 18 bits: valid 1 + tag 15 + lru 2
  */
 
 typedef struct {
-    uint32_t  valid : 1;            /*1 bit*/
-    uint32_t  tag : 15;              /*15 bits*/
-    uint32_t  lru : 2;              /*2 bits -- 0 = most recently used*/
+    uint32_t valid : 1;
+    uint32_t tag   : L1_TAG_BITS;
+    uint32_t lru   : 2;                 /* 0 = most recently used */
 } L1Line;
 
 typedef struct {
@@ -23,28 +26,25 @@ typedef struct {
     L1Set sets[L1_SETS];
 } L1Cache;
 
-/* Invalidates every line. */
+/* Clears every line. */
 void l1_init(L1Cache *l1);
 
-/* Returns the way holding pa, or WAY_NONE. */
+/* Returns the way holding pa's block, or -1. */
 int  l1_probe(L1Cache *l1, uint32_t pa);
 
-/* Makes `way` the most recently used line of its set. */
+/* Marks `way` as the most recently used line in its set. */
 void l1_age(L1Cache *l1, uint32_t index, int way);
 
-/* Returns an invalid way if the set has one, else the least recently used. */
+/* Returns a free way in the set if there is one, else the LRU way. */
 int  l1_select_victim(L1Cache *l1, uint32_t index);
 
-/* Installs pa as most recently used; returns 1 if it overwrote a valid line. */
-int  l1_install(L1Cache *l1, uint32_t pa);
+/* Puts pa's block into its set as the most recently used line. */
+void l1_install(L1Cache *l1, uint32_t pa);
 
-/* Marks a store that hit; promotes the line to most recently used. */
-void l1_write_hit(L1Cache *l1, uint32_t pa, int way);
-
-/* Frees `way` into *out_pa; returns 1 if a line was there, 0 if already free. */
+/* Empties `way`. If it held a block, writes its address to *out_pa and returns 1. */
 int  l1_evict(L1Cache *l1, uint32_t index, int way, uint32_t *out_pa);
 
-/* Drops every line in physical frame `frame`; returns how many. */
-int  l1_invalidate_frame(L1Cache *l1, uint32_t frame);
+/* Drops every line belonging to physical frame `frame`. */
+void l1_invalidate_frame(L1Cache *l1, uint32_t frame);
 
 #endif

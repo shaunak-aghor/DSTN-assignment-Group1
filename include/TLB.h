@@ -5,57 +5,40 @@
 #include "MemHier.h"
 
 /*
- * Identifier(PID)-based TLB.
+ * TLB: 32 entries, fully associative, tagged with the process ID so
+ * a context switch does not need a flush.
  *
- * Entry layout = 43 bits:
- *     valid 1 + vpn VPN_BITS(8) + pfn FRAME_BITS(15) + pid PID_BITS(14) + lru 5
- *
- * Fully associative: all TLB_ENTRIES entries are compared on the pair
- * Entries die only when the page they map is evicted or when the owning process terminates.
- *
- * Replacement: LRU counter, same convention as L1Line.lru.
- * The ranks of the valid entries are always a permutation of 0 .. (number of valid - 1).
+ * Entry = 43 bits: valid 1 + vpn 8 + pfn 15 + pid 14 + lru 5
+ * Replacement: LRU counter per entry (0 = most recently used).
  */
 
-#define TLB_LRU_BITS 5              /* log2(TLB_ENTRIES) = log2(32) */
+#define TLB_LRU_BITS 5                  /* log2(TLB_ENTRIES) */
 
 typedef struct {
     uint32_t valid : 1;
-    uint32_t vpn   : VPN_BITS;      /* 8  */
-    uint32_t pfn   : FRAME_BITS;    /* 15 */
-    uint32_t pid   : PID_BITS;      /* 14 */
-    uint32_t lru   : TLB_LRU_BITS;  /* 5, 0 = most recently used */
+    uint32_t vpn   : VPN_BITS;
+    uint32_t pfn   : FRAME_BITS;
+    uint32_t pid   : PID_BITS;
+    uint32_t lru   : TLB_LRU_BITS;
 } TLBEntry;
 
 typedef struct {
     TLBEntry entries[TLB_ENTRIES];
 } TLB;
 
-/* Invalidates every entry. */
+/* Clears every entry. */
 void tlb_init(TLB *t);
 
-/* Returns the entry holding (pid,vpn), or WAY_NONE.  No side effects. */
-int  tlb_probe(const TLB *t, uint32_t pid, uint32_t vpn);
-
-/* Translates (pid,vpn) into *pfn_out; returns 1 on a hit, 0 on a miss. */
+/* Looks up (pid, vpn). On a hit writes the frame to *pfn_out and returns 1. */
 int  tlb_lookup(TLB *t, uint32_t pid, uint32_t vpn, uint32_t *pfn_out);
 
-/* Returns an invalid entry if there is one, else the least recently used. */
-int  tlb_select_victim(const TLB *t);
+/* Adds the mapping (pid, vpn) -> pfn, replacing the LRU entry if full. */
+void tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn);
 
-/* Caches (pid,vpn)->pfn; returns 1 if it displaced a valid entry. */
-int  tlb_insert(TLB *t, uint32_t pid, uint32_t vpn, uint32_t pfn);
-
-/* Invalidates the entry for one page. */
+/* Removes the entry for one page, if present. */
 void tlb_invalidate_entry(TLB *t, uint32_t pid, uint32_t vpn);
 
-/* Invalidates every entry belonging to one process. */
-void tlb_invalidate_pid(TLB *t, uint32_t pid);
-
-/* Invalidates every entry mapping one physical frame. */
+/* Removes every entry that points at frame pfn. */
 void tlb_invalidate_frame(TLB *t, uint32_t pfn);
 
-/* Prints the valid entries. */
-void tlb_dump(const TLB *t);
-
-#endif /* TLB_H */
+#endif

@@ -3,58 +3,43 @@
 
 #include <stdint.h>
 #include "MemHier.h"
-#include "L1.h"
 
 /*
- * L2 cache: 32 KB, 16 B block, 8-way set associative.
- * Replacement: FIFO, 8x8 bit matrix per set (triangular state matrix).
- * Writes: write-through. Every write reaches MM at write time.
- * no dirty check, no stall, no write-back.
- * Exclusive with L1: a block promoted to L1 is invalidated here.
- * Line layout -- 14 bits:
- *   valid 1 + tag 13
- *   fifo_matrix 8 bytes (row i, bit j = 1 if way i is younger than way j)
+ * L2 cache: 32 KB, 16 B blocks, 8-way set associative, 256 sets.
+ * Write-through (every write also goes to memory), FIFO replacement.
+ * Exclusive with L1: a block lives in L1 or L2, never both.
+ *
+ * Line = 14 bits: valid 1 + tag 13
+ * Per set: 8x8 FIFO bit matrix (row i, bit j = 1 if way i is younger than way j)
  */
 
 typedef struct {
-    uint16_t valid : 1;            /* 1 bit */
-    uint16_t tag   : 13;           /* 13 bits */
+    uint16_t valid : 1;
+    uint16_t tag   : L2_TAG_BITS;
 } L2Line;
 
 typedef struct {
     L2Line  ways[L2_WAYS];
-    uint8_t fifo_matrix[L2_WAYS];   /* 8x8 bit matrix */
+    uint8_t fifo_matrix[L2_WAYS];
 } L2Set;
 
 typedef struct {
     L2Set sets[L2_SETS];
-
 } L2Cache;
 
-/* Invalidates every line. */
+/* Clears every line. */
 void l2_init(L2Cache *l2);
 
-/* Returns the way holding pa, or WAY_NONE. */
+/* Returns the way holding pa's block, or -1. */
 int  l2_probe(L2Cache *l2, uint32_t pa);
 
-/* Moves pa's block from L2 into L1, demoting L1's victim back into L2.
- * Returns 1 if the promotion displaced an L1 line, and sets *l2_evicted when
- * demoting that line into L2 displaced an L2 line in turn. */
-int  l2_promote(L2Cache *l2, L1Cache *l1, uint32_t pa, int *l2_evicted);
+/* Removes pa's block from L2 (used when it moves up to L1). */
+void l2_invalidate(L2Cache *l2, uint32_t pa);
 
-/* Invalidates pa's line; returns pa if it was present, 0 otherwise. */
-uint32_t l2_invalidate(L2Cache *l2, uint32_t pa);
+/* Puts pa's block into L2, replacing the oldest line if the set is full. */
+void l2_allocate(L2Cache *l2, uint32_t pa);
 
-/* Records `way` as the newest in its set's FIFO order. */
-void l2_age(L2Cache *l2, uint32_t index, int way);
-
-/* Installs pa; returns 1 if it displaced a valid line. */
-int  l2_allocate(L2Cache *l2, uint32_t pa);
-
-/* Returns an invalid way if the set has one, else the oldest in FIFO order. */
-int  l2_select_victim(L2Cache *l2, uint32_t index);
-
-/* Drops every line in physical frame `frame`; returns how many. */
-int  l2_invalidate_frame(L2Cache *l2, uint32_t frame);
+/* Drops every line belonging to physical frame `frame`. */
+void l2_invalidate_frame(L2Cache *l2, uint32_t frame);
 
 #endif
