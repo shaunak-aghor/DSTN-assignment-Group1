@@ -23,11 +23,16 @@ typedef struct {
     uint64_t l1_evictions;
 
     /* L2 */
-    uint64_t l2_hits, l2_misses, l2_promotions, l2_evictions;
-    uint64_t l2_updated_writes, l2_passthrough_writes;
+    uint64_t l2_read_hits, l2_read_misses;
+    uint64_t l2_write_hits, l2_write_misses;
+    uint64_t l2_evictions;
 
     /* write buffer */
-    uint64_t wb_enqueued, wb_drains, wb_stalls, wb_forwards;
+    uint64_t wb_enqueued;               /* stores accepted (new entry or merged) */
+    uint64_t wb_drains;                 /* entries written out to memory */
+    uint64_t wb_stalls;                 /* store had to wait: WB full */
+    uint64_t wb_read_stalls;            /* read had to wait for a queued store to drain */
+    uint64_t wb_swaps;                  /* L1 victim passed through the swap slot into L2 */
 
     /* main memory */
     uint64_t page_faults;               /* each one is a disk read */

@@ -9,12 +9,13 @@
 /*
  * The cache side of one access. L1 and L2 are searched at the same time
  * on two threads (look-aside), then the result is applied here.
+ * The write buffer sits in line with L1: every store goes through it,
+ * and the CPU never reads from it.
  */
 
 typedef enum {
     CACHE_MISS = 0,
     CACHE_HIT_L1,
-    CACHE_HIT_WB,
     CACHE_HIT_L2
 } CacheSearchResult;
 

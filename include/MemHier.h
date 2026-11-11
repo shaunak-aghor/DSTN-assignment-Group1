@@ -47,7 +47,8 @@
 #define L2_TAG_BITS         (PA_BITS - L2_INDEX_BITS - L2_OFFSET_BITS)   /* 15 */
 
 /* Write buffer and TLB */
-#define WB_ENTRIES          4
+#define WB_ENTRIES          4           /* 3 store slots + 1 L1<->L2 swap slot */
+#define WB_STORE_SLOTS      3
 #define TLB_ENTRIES         32
 #define PID_BITS            14
 

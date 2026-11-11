@@ -89,7 +89,8 @@ static void report(uint16_t nproc, uint64_t quantum, const char *trace)
     uint64_t l1_acc  = stats.l1_read_hits + stats.l1_read_misses
                      + stats.l1_write_hits + stats.l1_write_misses;
     uint64_t l1_hit  = stats.l1_read_hits + stats.l1_write_hits;
-    uint64_t l2_acc  = stats.l2_hits + stats.l2_misses;
+    uint64_t l2_hit  = stats.l2_read_hits + stats.l2_write_hits;
+    uint64_t l2_acc  = l2_hit + stats.l2_read_misses + stats.l2_write_misses;
     uint64_t tlb_acc = stats.tlb_hits + stats.tlb_misses;
 
     printf("\n================ RUN ================\n");
@@ -121,19 +122,20 @@ static void report(uint16_t nproc, uint64_t quantum, const char *trace)
            pct(l1_hit, l1_acc), (unsigned long long)stats.l1_evictions);
 
     printf("\n\nL2 (32 KB, 16 B, 8-way, FIFO):\n");
-    printf("  hits %llu   misses %llu   hit rate %.2f%%\n",
-           (unsigned long long)stats.l2_hits, (unsigned long long)stats.l2_misses,
-           pct(stats.l2_hits, l2_acc));
-    printf("  promotions to L1 %llu   evictions %llu   (exclusive)\n",
-           (unsigned long long)stats.l2_promotions, (unsigned long long)stats.l2_evictions);
-    printf("  writes updating a line %llu   passing through %llu\n",
-           (unsigned long long)stats.l2_updated_writes,
-           (unsigned long long)stats.l2_passthrough_writes);
+    printf("  read  hits %llu   misses %llu   (a read hit swaps the block into L1)\n",
+           (unsigned long long)stats.l2_read_hits, (unsigned long long)stats.l2_read_misses);
+    printf("  write hits %llu   misses %llu   (updated when the WB drains)\n",
+           (unsigned long long)stats.l2_write_hits, (unsigned long long)stats.l2_write_misses);
+    printf("  hit rate %.2f%%   evictions %llu   (exclusive with L1)\n",
+           pct(l2_hit, l2_acc), (unsigned long long)stats.l2_evictions);
 
-    printf("\n\nWrite buffer (%d blocks, FIFO):\n", WB_ENTRIES);
-    printf("  stores queued %llu   drains %llu   full stalls %llu   forwards %llu\n",
-           (unsigned long long)stats.wb_enqueued, (unsigned long long)stats.wb_drains,
-           (unsigned long long)stats.wb_stalls,   (unsigned long long)stats.wb_forwards);
+    printf("\n\nWrite buffer (%d store slots + 1 swap slot):\n", WB_STORE_SLOTS);
+    printf("  stores queued %llu   drains %llu\n",
+           (unsigned long long)stats.wb_enqueued, (unsigned long long)stats.wb_drains);
+    printf("  stalls: WB full %llu   read waiting on a queued store %llu\n",
+           (unsigned long long)stats.wb_stalls, (unsigned long long)stats.wb_read_stalls);
+    printf("  L1 victims moved to L2 through the swap slot %llu\n",
+           (unsigned long long)stats.wb_swaps);
 
     printf("\n\nMain memory (32 MB, LFU+aging):\n");
     printf("  page faults (disk reads) %llu   writebacks %llu\n",
